@@ -61,6 +61,8 @@ static jboolean native_is_running (JNIEnv *env, jobject thiz);
 static jlongArray native_get_stats (JNIEnv *env, jobject thiz);
 static void native_set_blocked_ips (JNIEnv *env, jobject thiz,
                                     jobjectArray addresses);
+static jboolean native_block_domain (JNIEnv *env, jobject thiz,
+                                     jstring domain);
 
 static JNINativeMethod native_methods[] = {
     { "TProxyStartService", "(Ljava/lang/String;I)Z",
@@ -70,6 +72,7 @@ static JNINativeMethod native_methods[] = {
     { "TProxyGetStats", "()[J", (void *)native_get_stats },
         { "TProxySetBlockedIps", "([Ljava/lang/String;)V",
             (void *)native_set_blocked_ips },
+    { "TProxyBlockDomain", "(Ljava/lang/String;)Z", (void *)native_block_domain },
 };
 
 static void
@@ -294,6 +297,22 @@ native_set_blocked_ips (JNIEnv *env, jobject thiz, jobjectArray addresses)
 
     hev_socks5_tunnel_set_blocked_ipv4 (parsed, count);
     free (parsed);
+}
+
+static jboolean
+native_block_domain (JNIEnv *env, jobject thiz, jstring domain)
+{
+    const char *value;
+    int result;
+
+    if (!domain)
+        return JNI_FALSE;
+    value = (*env)->GetStringUTFChars (env, domain, NULL);
+    if (!value)
+        return JNI_FALSE;
+    result = hev_socks5_tunnel_block_domain (value);
+    (*env)->ReleaseStringUTFChars (env, domain, value);
+    return result > 0 ? JNI_TRUE : JNI_FALSE;
 }
 
 #endif /* ANDROID */

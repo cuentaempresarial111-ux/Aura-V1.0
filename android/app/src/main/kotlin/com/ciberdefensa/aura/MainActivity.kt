@@ -5,9 +5,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
 import android.net.VpnService
+import android.net.Uri
 import android.os.Build
 import android.os.Debug
 import android.provider.Settings
+import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.content.pm.ApplicationInfo
 import java.io.File
@@ -17,7 +19,9 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import hev.htproxy.TProxyService
 import java.util.concurrent.Executors
+import java.util.Locale
 
 object AuraAntiTampering {
     private const val ANDROIDX_MASTER_KEY_ALIAS = "_androidx_security_master_key_"
@@ -198,6 +202,108 @@ class MainActivity: FlutterActivity() {
                     }
                 }
 
+                "mitigateNetworkThreat" -> {
+                    val arguments = call.arguments as? Map<*, *>
+                    val appPackage = arguments?.get("app_package") as? String
+                    val domain = normalizeThreatDomain(
+                        arguments?.get("domain") as? String,
+                    )
+                    if (appPackage.isNullOrBlank() || domain == null) {
+                        result.success(
+                            mapOf(
+                                "ok" to false,
+                                "error" to "Se requiere un paquete y un dominio válidos.",
+                            ),
+                        )
+                    } else {
+                        try {
+                            val appPackageVerified = try {
+                                packageManager.getApplicationInfo(appPackage, 0)
+                                true
+                            } catch (_: Exception) {
+                                false
+                            }
+                            if (!TProxyService.TProxyIsRunning()) {
+                                result.success(
+                                    mapOf(
+                                        "ok" to false,
+                                        "error" to "El túnel Aura no está activo.",
+                                        "enforcement_scope" to "device-wide",
+                                    ),
+                                )
+                            } else {
+                                val blocked = TProxyService.TProxyBlockDomain(domain)
+                                result.success(
+                                    mapOf(
+                                        "ok" to blocked,
+                                        "domain" to domain,
+                                        "requested_app_package" to appPackage,
+                                        "app_package_verified" to appPackageVerified,
+                                        "enforcement_scope" to "device-wide",
+                                        "app_specific" to false,
+                                        "message" to if (blocked) {
+                                            "Dominio bloqueado globalmente en el DNS local."
+                                        } else {
+                                            "El motor no aceptó la regla de dominio."
+                                        },
+                                    ),
+                                )
+                            }
+                        } catch (exception: Exception) {
+                            result.success(
+                                mapOf(
+                                    "ok" to false,
+                                    "error" to exception.message
+                                        ?: "No se pudo aplicar la regla DNS.",
+                                    "enforcement_scope" to "device-wide",
+                                ),
+                            )
+                        }
+                    }
+                }
+
+                "isolateMaliciousApp" -> {
+                    val arguments = call.arguments as? Map<*, *>
+                    val targetPackage = arguments?.get("package_name") as? String
+                    val reason = arguments?.get("reason") as? String
+                    if (targetPackage.isNullOrBlank() || reason.isNullOrBlank()) {
+                        result.success(
+                            mapOf("ok" to false, "error" to "Paquete o motivo vacío."),
+                        )
+                    } else {
+                        try {
+                            packageManager.getApplicationInfo(targetPackage, 0)
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.fromParts("package", targetPackage, null),
+                                ),
+                            )
+                            result.success(
+                                mapOf(
+                                    "ok" to true,
+                                    "package_name" to targetPackage,
+                                    "reason" to reason.take(240),
+                                    "user_action_required" to true,
+                                    "message" to "Panel de la aplicación abierto; la decisión corresponde al usuario.",
+                                ),
+                            )
+                        } catch (exception: ActivityNotFoundException) {
+                            result.success(
+                                mapOf("ok" to false, "error" to "No se pudo abrir Ajustes."),
+                            )
+                        } catch (exception: Exception) {
+                            result.success(
+                                mapOf(
+                                    "ok" to false,
+                                    "error" to exception.message
+                                        ?: "No se pudo abrir el panel de la app.",
+                                ),
+                            )
+                        }
+                    }
+                }
+
                 else -> result.notImplemented()
             }
         }
@@ -365,5 +471,14 @@ class MainActivity: FlutterActivity() {
         pendingShieldResult?.success(false)
         pendingShieldResult = null
         super.onDestroy()
+    }
+
+    private fun normalizeThreatDomain(value: String?): String? {
+        val domain = value?.trim()?.trimEnd('.')?.lowercase(Locale.ROOT) ?: return null
+        if (domain.isEmpty() || domain.length > 253) return null
+        val labelPattern = Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+        return domain.split('.').takeIf { labels ->
+            labels.all { it.length <= 63 && labelPattern.matches(it) }
+        }?.joinToString(".")
     }
 }

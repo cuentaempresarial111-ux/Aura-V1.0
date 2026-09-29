@@ -14,11 +14,12 @@ La aplicación está diseñada para operar sin acceso root. El escudo VPN requie
 
 ## ✨ Características principales
 
-- **Cerebro de IA integrado:** conecta con Gemini, usando `gemini-2.5-flash` de forma predeterminada, para responder consultas y analizar hallazgos. El servicio auxiliar empaqueta la telemetría como JSON; la pantalla principal también puede enviar consultas de texto y procesar llamadas a herramientas.
+- **Cerebro agéntico:** Gemini `gemini-2.5-flash` analiza JSON de auditoría y puede invocar `mitigate_network_threat` e `isolate_malicious_app` mediante Function Calling. Una decisión de herramienta eleva de forma síncrona el estado visual a crítico.
 - **Bóveda local:** persiste la clave de Gemini y hasta 500 registros con `flutter_secure_storage`. En Android se habilita `encryptedSharedPreferences`; el proyecto no especifica ni garantiza explícitamente que el cifrado esté respaldado por hardware.
 - **Inspección DNS local:** el endpoint `10.0.0.3:53/UDP` del túnel procesa consultas DNS dentro de `hev-mapped-dns`, aplica una heurística estructural DGA y responde localmente a las coincidencias con `127.0.0.1` o `::1`.
 - **Telemetría asíncrona:** el motor nativo envía eventos `{timestamp, source_app, requested_domain, action}` por `EventChannel`. Kotlin usa colas limitadas y resuelve el UID fuera del hilo TUN; Dart mantiene un anillo de 500 eventos y persiste lotes en la bóveda cifrada.
-- **Análisis de auditoría:** la pantalla puede enviar bajo demanda hasta 100 eventos recientes como JSON a Gemini; la telemetría no se remite a la IA automáticamente por cada consulta DNS.
+- **Bucle cerrado DNS:** los eventos `BLOCKED` inician una inferencia automática por dominio deduplicado si hay una API key guardada; el análisis manual puede enviar hasta 100 eventos recientes como JSON.
+- **Contramedidas operativas:** el motor C instala en caliente reglas exactas de dominio; la herramienta de aislamiento abre los ajustes Android de la app para una decisión humana.
 - **App Genome Scanner:** inventaría apps instaladas y devuelve solo aquellas con servicios de Accesibilidad o Notification Listener habilitados por el usuario y protegidos por el permiso Android correspondiente.
 - **Detector de entorno hostil:** inspecciona fingerprint, modelo, hardware y estado del debugger; emulador o debugger elevan inmediatamente el estado de seguridad a `CRITICAL`.
 - **Comprobación de integridad:** combina resultados de canales nativos Android con comprobaciones locales de indicadores como binarios `su`, depuración, entorno virtual y manipulación.
@@ -49,7 +50,7 @@ El flujo de la pantalla principal usa estado local de Flutter (`StatefulWidget` 
 
 - [`AuraAppGenomeScanner.kt`](android/app/src/main/kotlin/com/ciberdefensa/aura/AuraAppGenomeScanner.kt) cruza servicios instalados, permiso de protección declarado y componentes habilitados en Settings para Accesibilidad y Notification Listener.
 - [`AuraHostileEnvironment.kt`](android/app/src/main/kotlin/com/ciberdefensa/aura/AuraHostileEnvironment.kt) genera indicadores de emulador y debugger sin exponer las cadenas completas del dispositivo.
-- [`MainActivity.kt`](android/app/src/main/kotlin/com/ciberdefensa/aura/MainActivity.kt) publica `checkHostileEnvironment` y `scanActiveSensitiveServices` por `MethodChannel`; el inventario se ejecuta fuera del hilo de UI.
+- [`MainActivity.kt`](android/app/src/main/kotlin/com/ciberdefensa/aura/MainActivity.kt) publica los métodos de entorno, App Genome, mitigación DNS global y apertura de ajustes por `MethodChannel`; los escaneos se ejecutan fuera del hilo de UI.
 
 ---
 
@@ -94,6 +95,9 @@ El workflow `android-build` de [`codemagic.yaml`](codemagic.yaml) automatiza la 
 - El modo sin root evita depender de privilegios de superusuario, pero no elimina la necesidad de permisos Android ni de la autorización del usuario para iniciar el servicio VPN.
 - La inspección implementada cubre consultas DNS UDP/53 recibidas por el endpoint configurado. No descifra DNS-over-HTTPS ni DNS-over-TLS; otros mecanismos de resolución no son evaluados por esta heurística.
 - El criterio DGA actual es una heurística local sobre etiquetas largas con alta diversidad de caracteres y dígitos. No equivale a inteligencia de amenazas, reputación de dominios ni una garantía de detección de malware.
+- `mitigate_network_threat` bloquea el dominio exacto para todo el dispositivo. `VpnService` no proporciona un UID fiable por paquete en el TUN actual; `app_package` identifica el contexto de la alerta, pero no limita el alcance de la regla.
+- `isolate_malicious_app` solo abre la pantalla de detalles de Android y comunica el motivo. Android no permite que Aura fuerce la detención ni la desinstalación de otra app sin privilegios especiales; el usuario decide en Ajustes.
+- Las reglas dinámicas DNS están limitadas a 256 dominios y viven en memoria del proceso nativo. La protección cubre la resolución DNS local y conexiones que reutilicen IPs mapeadas; no inspecciona ni bloquea DoH/DoT.
 - La detección de emulador se basa en marcadores de `Build.FINGERPRINT`, `Build.MODEL` y `Build.HARDWARE`; puede producir positivos en laboratorios de QA y no es una prueba criptográfica de integridad.
 - El scanner informa componentes activos según los ajustes seguros de Android y el estado enabled del paquete/servicio. Android limita qué metadatos de otras aplicaciones son visibles y las políticas de distribución pueden restringir `QUERY_ALL_PACKAGES`.
 - `ConnectivityManager.getConnectionOwnerUid` puede no devolver un UID para el tuple observado. En ese caso el evento registra `uid-unavailable`; no se atribuye una aplicación por conjetura.

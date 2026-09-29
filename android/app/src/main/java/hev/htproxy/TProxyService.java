@@ -18,6 +18,8 @@ public final class TProxyService {
 
     public static native void TProxySetBlockedIps(String[] addresses);
 
+    public static native boolean TProxyBlockDomain(String domain);
+
     public static void dispatchDnsEvent(
             String domain, int action, String sourceAddress, int sourcePort) {
         com.ciberdefensa.aura.AuraNetworkStream.INSTANCE.emitDnsEvent(

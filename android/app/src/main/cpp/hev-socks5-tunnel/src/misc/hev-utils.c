@@ -107,6 +107,8 @@ hev_socks5_addr_from_lwip (HevSocks5Addr *addr, const ip_addr_t *ip, u16_t port)
         const char *name = NULL;
         if (dns)
             name = hev_mapped_dns_lookup (dns, ntohl (ip_2_ip4 (ip)->addr));
+        if (name && hev_mapped_dns_is_blocked (name))
+            return -1;
         if (name)
             hev_socks5_addr_from_name (addr, name, htons (port));
         else

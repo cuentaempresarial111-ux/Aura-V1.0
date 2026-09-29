@@ -195,7 +195,12 @@ udp_recv_handler (void *arg, struct udp_pcb *pcb, struct pbuf *p,
 
     frame->data = p;
     memset (&frame->node, 0, sizeof (frame->node));
-    hev_socks5_addr_from_lwip (&frame->addr, &pcb->local_ip, pcb->local_port);
+    if (hev_socks5_addr_from_lwip (
+            &frame->addr, &pcb->local_ip, pcb->local_port) < 0) {
+        pbuf_free (p);
+        hev_free (frame);
+        return;
+    }
 
     if (frame->addr.atype == HEV_SOCKS5_ADDR_TYPE_NAME) {
         self->addr = ip_2_ip4 (&pcb->local_ip)->addr;

@@ -57,6 +57,8 @@ void hev_mapped_dns_put (HevMappedDNS *self);
 int hev_mapped_dns_handle (HevMappedDNS *self, void *req, int qlen, void *res,
                            int slen, uint32_t source_ipv4,
                            uint16_t source_port);
+int hev_mapped_dns_block_domain (const char *domain);
+int hev_mapped_dns_is_blocked (const char *domain);
 const char *hev_mapped_dns_lookup (HevMappedDNS *self, int ip);
 
 #ifdef __cplusplus

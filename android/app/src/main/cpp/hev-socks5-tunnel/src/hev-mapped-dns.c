@@ -12,6 +12,9 @@
 #include <string.h>
 #include <ctype.h>
 #include <arpa/inet.h>
+#ifdef __ANDROID__
+#include <pthread.h>
+#endif
 
 #include <hev-compiler.h>
 #include <hev-memory-allocator.h>
@@ -34,7 +37,14 @@ enum
     DNS_EVENT_BLOCKED = 1,
     DNS_MAX_QUESTIONS = 32,
     DNS_MAX_NAME = 253,
+    DNS_MAX_BLOCKED_DOMAINS = 256,
 };
+
+#ifdef __ANDROID__
+static pthread_mutex_t blocked_domains_mutex = PTHREAD_MUTEX_INITIALIZER;
+static char blocked_domains[DNS_MAX_BLOCKED_DOMAINS][DNS_MAX_NAME + 1];
+static size_t blocked_domains_count;
+#endif
 
 typedef struct _DNSHdr DNSHdr;
 
@@ -265,6 +275,100 @@ domain_is_suspicious (const char *domain)
     return 0;
 }
 
+static int
+normalize_domain (const char *domain, char normalized[DNS_MAX_NAME + 1])
+{
+    size_t length, label_length = 0, i;
+
+    if (!domain)
+        return -1;
+    length = strlen (domain);
+    if (length && domain[length - 1] == '.')
+        length--;
+    if (!length || length > DNS_MAX_NAME)
+        return -1;
+
+    for (i = 0; i < length; i++) {
+        const unsigned char ch = (unsigned char)domain[i];
+        if (ch == '.') {
+            if (!label_length || label_length > 63 || normalized[i - 1] == '-')
+                return -1;
+            label_length = 0;
+            normalized[i] = '.';
+        } else if ((ch >= 'a' && ch <= 'z') ||
+                   (ch >= 'A' && ch <= 'Z') ||
+                   (ch >= '0' && ch <= '9') || ch == '-') {
+            if (!label_length && ch == '-')
+                return -1;
+            normalized[i] = (char)tolower (ch);
+            label_length++;
+            if (label_length > 63)
+                return -1;
+        } else {
+            return -1;
+        }
+    }
+    if (!label_length || normalized[length - 1] == '-')
+        return -1;
+    normalized[length] = '\0';
+    return 0;
+}
+
+int
+hev_mapped_dns_block_domain (const char *domain)
+{
+#ifdef __ANDROID__
+    char normalized[DNS_MAX_NAME + 1];
+    size_t i;
+
+    if (normalize_domain (domain, normalized) < 0)
+        return -1;
+    pthread_mutex_lock (&blocked_domains_mutex);
+    for (i = 0; i < blocked_domains_count; i++) {
+        if (0 == strcmp (blocked_domains[i], normalized)) {
+            pthread_mutex_unlock (&blocked_domains_mutex);
+            return 1;
+        }
+    }
+    if (blocked_domains_count >= DNS_MAX_BLOCKED_DOMAINS) {
+        pthread_mutex_unlock (&blocked_domains_mutex);
+        return 0;
+    }
+    memcpy (blocked_domains[blocked_domains_count++], normalized,
+            strlen (normalized) + 1);
+    pthread_mutex_unlock (&blocked_domains_mutex);
+    return 1;
+#else
+    (void)domain;
+    return -1;
+#endif
+}
+
+int
+hev_mapped_dns_is_blocked (const char *domain)
+{
+#ifdef __ANDROID__
+    char normalized[DNS_MAX_NAME + 1];
+    size_t i;
+    int blocked = 0;
+
+    if (normalize_domain (domain, normalized) < 0)
+        return 0;
+    pthread_mutex_lock (&blocked_domains_mutex);
+    for (i = 0; i < blocked_domains_count; i++) {
+        if (0 == strcmp (blocked_domains[i], normalized)) {
+            blocked = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock (&blocked_domains_mutex);
+    return blocked;
+#else
+    (void)domain;
+    return 0;
+#endif
+}
+
 int
 hev_mapped_dns_handle (HevMappedDNS *self, void *req, int qlen, void *res,
                        int slen, uint32_t source_ipv4, uint16_t source_port)
@@ -309,7 +413,8 @@ hev_mapped_dns_handle (HevMappedDNS *self, void *req, int qlen, void *res,
     memcpy (sb, rb, off);
     for (i = 0; i < qd; i++) {
         const int blocked = questions[i].class == 1 &&
-            domain_is_suspicious (questions[i].name);
+            (hev_mapped_dns_is_blocked (questions[i].name) ||
+             domain_is_suspicious (questions[i].name));
         uint16_t answer_type = questions[i].type;
         int answer_len;
         uint32_t mapped_ip;

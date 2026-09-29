@@ -26,6 +26,7 @@ void hev_socks5_tunnel_stats (size_t *tx_packets, size_t *tx_bytes,
 
 void hev_socks5_tunnel_set_blocked_ipv4 (const uint32_t *addresses,
                                          size_t count);
+int hev_socks5_tunnel_block_domain (const char *domain);
 
 void hev_socks5_tunnel_update_session (HevListNode *node);
 

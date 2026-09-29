@@ -9,6 +9,8 @@ import 'radar_waves.dart';
 import 'secure_vault.dart';
 import 'network_auditor.dart';
 
+enum AuraState { secure, scanning, warning, critical }
+
 void main() => runApp(const AuraApp());
 
 class AuraApp extends StatelessWidget {
@@ -38,9 +40,10 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
   late StreamSubscription<Map<String, dynamic>> _integritySubscription;
+  late StreamSubscription<NetworkAuditEvent> _networkThreatSubscription;
+  late final AuraAIBrain _aiBrain;
   final AuraSecurityEngine _securityEngine = AuraSecurityEngine();
   final AuraVoiceEngine _voiceEngine = AuraVoiceEngine();
-  final AuraAIBrain _aiBrain = AuraAIBrain();
   final AuraSecureVault _secureVault = AuraSecureVault();
   final AuraNetworkAuditor _networkAuditor = AuraNetworkAuditor();
   final TextEditingController _inputController = TextEditingController();
@@ -49,7 +52,18 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
   String _liveConsoleLogs = "SISTEMA AURA: Núcleo defensivo activo e íntegro.";
   bool _shieldActive = false;
   bool _aiProcessing = false;
+  bool _agentToolActionOccurred = false;
+  bool _agentInferenceRunning = false;
+  final Set<String> _autoAnalyzedBlockedDomains = <String>{};
+  final List<NetworkAuditEvent> _pendingBlockedEvents = <NetworkAuditEvent>[];
   String? _lastRecordedIntegrityLog;
+
+  AuraState get _auraState {
+    if (_securityStatus == "THREAT") return AuraState.critical;
+    if (_securityStatus == "SCANNING") return AuraState.scanning;
+    if (_securityStatus == "WARNING") return AuraState.warning;
+    return AuraState.secure;
+  }
 
   String get _faceState =>
       _shieldActive || _securityStatus == "THREAT" ? "THREAT" : _securityStatus;
@@ -57,6 +71,12 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
   @override
   void initState() {
     super.initState();
+    _aiBrain = AuraAIBrain(
+      onToolStarted: _handleAgentToolStarted,
+      onToolCompleted: _handleAgentToolCompleted,
+    );
+    _networkThreatSubscription =
+        _networkAuditor.eventStream.listen(_handleNetworkAuditEvent);
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -68,21 +88,26 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
 
       final level = event["level"] as SystemThreatLevel;
       final logs = event["logs"] as String;
+      final critical =
+          level == SystemThreatLevel.critical || _agentToolActionOccurred;
       setState(() {
-        _liveConsoleLogs = logs;
-        _securityStatus = level == SystemThreatLevel.critical
+        if (!_agentToolActionOccurred) _liveConsoleLogs = logs;
+        _securityStatus = critical
             ? "THREAT"
             : level == SystemThreatLevel.warning
                 ? "WARNING"
                 : "SECURE";
       });
 
-      if (level != SystemThreatLevel.secure &&
+      if ((level != SystemThreatLevel.secure || _agentToolActionOccurred) &&
           logs != _lastRecordedIntegrityLog) {
-        _lastRecordedIntegrityLog = logs;
-        _writeSecureLog(logs);
+        final message = _agentToolActionOccurred
+            ? 'Acción defensiva de Gemini ejecutada; estado crítico retenido.'
+            : logs;
+        _lastRecordedIntegrityLog = message;
+        _writeSecureLog(message);
       }
-      if (level == SystemThreatLevel.critical) {
+      if (critical) {
         _voiceEngine.speak("Alerta crítica de integridad detectada.");
       }
     });
@@ -92,6 +117,7 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
   void dispose() {
     _pulseController.dispose();
     _integritySubscription.cancel();
+    _networkThreatSubscription.cancel();
     _voiceEngine.stop();
     _inputController.dispose();
     unawaited(_networkAuditor.dispose());
@@ -99,8 +125,8 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
   }
 
   Color _getCoreColor() {
-    if (_securityStatus == "SCANNING") return const Color(0xFF06B6D4);
-    if (_securityStatus == "THREAT" || _shieldActive)
+    if (_auraState == AuraState.scanning) return const Color(0xFF06B6D4);
+    if (_auraState == AuraState.critical || _shieldActive)
       return const Color(0xFFEF4444);
     if (_securityStatus == "WARNING") return const Color(0xFFF59E0B);
     return const Color(0xFF10B981);
@@ -108,6 +134,7 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
 
   void _triggerLocalScan() async {
     var hostileEnvironment = false;
+    _agentToolActionOccurred = false;
     setState(() {
       _securityStatus = "SCANNING";
       _aiProcessing = true;
@@ -167,9 +194,11 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
       if (!mounted) return;
 
       setState(() {
-        if (hostileEnvironment) {
+        if (hostileEnvironment || _agentToolActionOccurred) {
           _securityStatus = "THREAT";
-          _liveConsoleLogs = 'ALERTA MÁXIMA: entorno hostil detectado. $response';
+          _liveConsoleLogs = hostileEnvironment
+              ? 'ALERTA MÁXIMA: entorno hostil detectado. $response'
+              : 'ALERTA CRÍTICA: se ejecutó una contramedida. $response';
         } else {
           _securityStatus = applications.isEmpty ? "SECURE" : "WARNING";
           _liveConsoleLogs = response;
@@ -181,9 +210,11 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _securityStatus = hostileEnvironment ? "THREAT" : "WARNING";
-        _liveConsoleLogs = hostileEnvironment
-            ? 'ALERTA MÁXIMA: entorno hostil detectado. Falló el escaneo local.'
+        _securityStatus = hostileEnvironment || _agentToolActionOccurred
+          ? "THREAT"
+          : "WARNING";
+        _liveConsoleLogs = hostileEnvironment || _agentToolActionOccurred
+          ? 'ALERTA CRÍTICA: falló una parte del escaneo local.'
             : 'No se pudo completar la auditoría local.';
       });
       await _writeSecureLog('Error de auditoría App Genome: $error');
@@ -197,6 +228,7 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
     if (query.isEmpty) return;
 
     _inputController.clear();
+    _agentToolActionOccurred = false;
     setState(() {
       _aiProcessing = true;
       _liveConsoleLogs = "Aura procesando consulta analítica...";
@@ -207,13 +239,108 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
       if (!mounted) return;
 
       setState(() {
-        _liveConsoleLogs = response;
+        _liveConsoleLogs = _agentToolActionOccurred
+            ? 'ALERTA CRÍTICA: Aura ejecutó una acción defensiva. $response'
+            : response;
       });
       await _writeSecureLog('Consulta: $query\nRespuesta: $response');
       _voiceEngine.speak(response);
     } finally {
       if (mounted) setState(() => _aiProcessing = false);
     }
+  }
+
+  void _handleAgentToolStarted(
+    String toolName,
+    Map<String, Object?> arguments,
+  ) {
+    _agentToolActionOccurred = true;
+    if (mounted) {
+      setState(() {
+        _securityStatus = "THREAT";
+        _liveConsoleLogs = 'ALERTA CRÍTICA: Aura está ejecutando $toolName.';
+      });
+    }
+    unawaited(_voiceEngine.announceToolExecution(toolName, arguments));
+  }
+
+  void _handleNetworkAuditEvent(NetworkAuditEvent event) {
+    if (event.action != NetworkAuditAction.blocked ||
+        _autoAnalyzedBlockedDomains.contains(event.requestedDomain)) {
+      return;
+    }
+
+    if (_autoAnalyzedBlockedDomains.length >= 128) {
+      _autoAnalyzedBlockedDomains.remove(_autoAnalyzedBlockedDomains.first);
+    }
+    _autoAnalyzedBlockedDomains.add(event.requestedDomain);
+    _agentToolActionOccurred = true;
+    if (mounted) {
+      setState(() {
+        _securityStatus = "THREAT";
+        _liveConsoleLogs =
+            'ALERTA CRÍTICA: DNS bloqueado para ${event.requestedDomain}.';
+      });
+    }
+    if (_agentInferenceRunning) {
+      if (_pendingBlockedEvents.length < 64) {
+        _pendingBlockedEvents.add(event);
+      }
+      return;
+    }
+    unawaited(_analyzeBlockedDnsEvent(event));
+  }
+
+  Future<void> _analyzeBlockedDnsEvent(NetworkAuditEvent event) async {
+    if (_agentInferenceRunning || !mounted) return;
+    _agentInferenceRunning = true;
+    try {
+      final apiKey = await _aiBrain.storedApiKey;
+      if (apiKey == null || apiKey.isEmpty) return;
+
+      final payload = jsonEncode({
+        'event_type': 'blocked_dns_threat',
+        'event': event.toJson(),
+      });
+      final response = await _aiBrain.analyzeCyberThreat(
+        'Evalúa este evento DNS bloqueado en JSON. Si la evidencia confirma '
+        'una amenaza, usa las herramientas defensivas disponibles. Respeta '
+        'el alcance global de la mitigación y no inventes un paquete. JSON: $payload',
+      );
+      if (!mounted) return;
+      setState(() {
+        _securityStatus = "THREAT";
+        _liveConsoleLogs =
+            'ALERTA CRÍTICA: ${event.requestedDomain}. $response';
+      });
+      await _writeSecureLog('Análisis agéntico DNS: $response');
+    } finally {
+      _agentInferenceRunning = false;
+      if (_pendingBlockedEvents.isNotEmpty && mounted) {
+        final nextEvent = _pendingBlockedEvents.removeAt(0);
+        unawaited(_analyzeBlockedDnsEvent(nextEvent));
+      }
+    }
+  }
+
+  void _handleAgentToolCompleted(
+    String toolName,
+    Map<String, Object?> arguments,
+    Map<String, Object?> result,
+  ) {
+    _agentToolActionOccurred = true;
+    final success = result['ok'] == true;
+    if (mounted) {
+      setState(() {
+        _securityStatus = "THREAT";
+        final detail = result['message'] ?? result['error'] ?? 'sin detalle';
+        _liveConsoleLogs = success
+            ? 'ALERTA CRÍTICA: $detail'
+            : 'ALERTA CRÍTICA: acción no confirmada. $detail';
+      });
+    }
+    unawaited(_writeSecureLog('Herramienta $toolName: ${jsonEncode(result)}'));
+    unawaited(_voiceEngine.announceToolResult(toolName, result));
   }
 
   Future<String> _analyzeWithStoredKey(String prompt) async {
@@ -331,7 +458,8 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
-                    if (_securityStatus == "SCANNING")
+                    if (_auraState == AuraState.scanning ||
+                      _auraState == AuraState.critical)
                       RepaintBoundary(
                         child: AuraRadarWaves(
                           animation: _pulseController,

@@ -103,6 +103,14 @@ hev_socks5_tunnel_set_blocked_ipv4 (const uint32_t *addresses, size_t count)
     pthread_mutex_unlock (&blocked_ipv4_mutex);
 }
 
+int
+hev_socks5_tunnel_block_domain (const char *domain)
+{
+    if (!READ_ONCE (run))
+        return 0;
+    return hev_mapped_dns_block_domain (domain);
+}
+
 static int
 packet_ipv4_is_blocked (const struct pbuf *packet)
 {
