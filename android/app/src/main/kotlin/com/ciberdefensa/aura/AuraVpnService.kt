@@ -53,12 +53,12 @@ class AuraVpnService : VpnService() {
         startId: Int,
     ): Int {
         startForeground(NOTIFICATION_ID, createNotification())
-        AuraAntiTampering.enforce(this)
+        if (!verifyIntegrityOrStop()) return START_NOT_STICKY
         if (integrityMonitor.isShutdown) return START_NOT_STICKY
         if (!integrityCheckScheduled) {
             integrityCheckScheduled = true
             integrityMonitor.scheduleWithFixedDelay(
-                { AuraAntiTampering.enforce(this) },
+                { verifyIntegrityOrStop() },
                 30,
                 30,
                 TimeUnit.SECONDS,
@@ -83,6 +83,25 @@ class AuraVpnService : VpnService() {
         vpnInterface?.close()
         vpnInterface = null
         super.onDestroy()
+    }
+
+    private fun verifyIntegrityOrStop(): Boolean {
+        val report = try {
+            AuraAntiTampering.inspect(this)
+        } catch (exception: Exception) {
+            Log.e("AuraVPN", "No se pudo comprobar la integridad del servicio.", exception)
+            mapOf("isSecure" to false)
+        }
+        if (report["isSecure"] == true) return true
+
+        Log.e("AuraVPN", "Deteniendo el túnel por fallo de integridad.")
+        if (tunnelStarted) {
+            TProxyService.TProxyStopService()
+            tunnelStarted = false
+        }
+        reportState(false, "Escudo detenido por fallo de integridad.")
+        stopSelf()
+        return false
     }
 
     private fun startTunnel() {

@@ -17,6 +17,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.Executors
 
 object AuraAntiTampering {
     private const val ANDROIDX_MASTER_KEY_ALIAS = "_androidx_security_master_key_"
@@ -147,7 +148,9 @@ class MainActivity: FlutterActivity() {
     private val SHIELD_CHANNEL = "com.ciberdefensa.aura/shield"
     private val TELEMETRY_CHANNEL = "com.ciberdefensa.aura/telemetry"
     private val ANTI_TAMPERING_CHANNEL = "com.ciberdefensa.aura/anti_tampering"
+    private val SECURITY_CHANNEL = "com.ciberdefensa.aura/security"
     private val NETWORK_STREAM_CHANNEL = "com.aura.cyberdefense/network_stream"
+    private val genomeScannerExecutor = Executors.newSingleThreadExecutor()
     private var pendingShieldResult: MethodChannel.Result? = null
     private var vpnReceiverRegistered = false
     private val vpnStateReceiver = object : BroadcastReceiver() {
@@ -168,6 +171,36 @@ class MainActivity: FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             NETWORK_STREAM_CHANNEL,
         ).setStreamHandler(AuraNetworkStream)
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            SECURITY_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "checkHostileEnvironment" -> {
+                    result.success(AuraHostileEnvironment.inspect())
+                }
+
+                "scanActiveSensitiveServices" -> {
+                    genomeScannerExecutor.execute {
+                        try {
+                            val scanResult = AuraAppGenomeScanner.scan(applicationContext)
+                            runOnUiThread { result.success(scanResult) }
+                        } catch (exception: Exception) {
+                            runOnUiThread {
+                                result.error(
+                                    "APP_GENOME_SCAN_FAILED",
+                                    exception.message ?: "No se pudo completar el escaneo.",
+                                    null,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                else -> result.notImplemented()
+            }
+        }
 
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -239,7 +272,7 @@ class MainActivity: FlutterActivity() {
             ANTI_TAMPERING_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
-                "checkIntegrity" -> result.success(AuraAntiTampering.enforce(this))
+                "checkIntegrity" -> result.success(AuraAntiTampering.inspect(this))
                 else -> result.notImplemented()
             }
         }
@@ -324,6 +357,7 @@ class MainActivity: FlutterActivity() {
     }
 
     override fun onDestroy() {
+        genomeScannerExecutor.shutdownNow()
         if (vpnReceiverRegistered) {
             unregisterReceiver(vpnStateReceiver)
             vpnReceiverRegistered = false

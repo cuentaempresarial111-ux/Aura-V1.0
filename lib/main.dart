@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'security_engine.dart';
 import 'voice_engine.dart';
@@ -106,6 +107,7 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
   }
 
   void _triggerLocalScan() async {
+    var hostileEnvironment = false;
     setState(() {
       _securityStatus = "SCANNING";
       _aiProcessing = true;
@@ -114,18 +116,77 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
     });
     try {
       _voiceEngine.speak("Iniciando auditoría interna del sistema.");
+      final environment = await _securityEngine.checkHostileEnvironment();
+      hostileEnvironment = environment['isHostile'] == true;
+      if (!mounted) return;
+      if (hostileEnvironment) {
+        setState(() {
+          _securityStatus = "THREAT";
+          _liveConsoleLogs =
+              'ALERTA MÁXIMA: ${environment['indicators'] ?? 'entorno hostil'}';
+        });
+        _voiceEngine.speak('Alerta máxima de entorno hostil detectado.');
+        await _writeSecureLog(_liveConsoleLogs);
+      }
+
+      final genomeReport =
+          await _securityEngine.scanActiveSensitiveServices();
+      final rawApplications = genomeReport['applications'];
+      final applications = rawApplications is List
+          ? rawApplications.whereType<Map>().toList()
+          : const <Map>[];
+      final packageNames = applications
+          .map((application) => application['package_name'])
+          .whereType<String>()
+          .join(', ');
+        final environmentIndicators =
+          (environment['indicators'] as List?)?.join(', ') ?? 'indicadores disponibles';
+      final payload = jsonEncode({
+        'app_genome_scan': genomeReport,
+        'hostile_environment': environment,
+      });
+      if (!mounted) return;
+      setState(() {
+        if (!hostileEnvironment) {
+          _securityStatus = applications.isEmpty ? "SECURE" : "WARNING";
+        }
+        final scanSummary = applications.isEmpty
+            ? 'App Genome: no hay servicios sensibles activos.'
+            : 'App Genome: ${applications.length} apps con servicios sensibles: '
+                '$packageNames';
+        _liveConsoleLogs = hostileEnvironment
+          ? 'ALERTA MÁXIMA: $environmentIndicators. $scanSummary'
+          : scanSummary;
+      });
+      await _writeSecureLog('App Genome Scanner: $payload');
       final response = await _analyzeWithStoredKey(
-        'EjecutaEscaneoDispositivo ahora y resume únicamente los hallazgos devueltos por la telemetría.',
+        'Analiza este informe local de App Genome Scanner y entorno. '
+        'Resume solo evidencias incluidas, indica cuántas apps tienen servicios '
+        'sensibles activos y no rebajes una alerta crítica. JSON: $payload',
       );
       if (!mounted) return;
 
       setState(() {
-        _securityStatus = "WARNING";
-        _liveConsoleLogs = response;
+        if (hostileEnvironment) {
+          _securityStatus = "THREAT";
+          _liveConsoleLogs = 'ALERTA MÁXIMA: entorno hostil detectado. $response';
+        } else {
+          _securityStatus = applications.isEmpty ? "SECURE" : "WARNING";
+          _liveConsoleLogs = response;
+        }
       });
 
       await _writeSecureLog('Escaneo: $response');
       _voiceEngine.speak(response);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _securityStatus = hostileEnvironment ? "THREAT" : "WARNING";
+        _liveConsoleLogs = hostileEnvironment
+            ? 'ALERTA MÁXIMA: entorno hostil detectado. Falló el escaneo local.'
+            : 'No se pudo completar la auditoría local.';
+      });
+      await _writeSecureLog('Error de auditoría App Genome: $error');
     } finally {
       if (mounted) setState(() => _aiProcessing = false);
     }

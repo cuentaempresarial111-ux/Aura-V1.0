@@ -10,6 +10,8 @@ class AuraSecurityEngine {
       MethodChannel('com.ciberdefensa.aura/telemetry');
   static const MethodChannel _antiTamperingChannel =
       MethodChannel('com.ciberdefensa.aura/anti_tampering');
+    static const MethodChannel _securityChannel =
+      MethodChannel('com.ciberdefensa.aura/security');
   static const List<String> _rootBinaryPaths = [
     '/sbin/su',
     '/system/bin/su',
@@ -19,6 +21,7 @@ class AuraSecurityEngine {
   Future<Map<String, dynamic>> checkDeviceIntegrity() async {
     Map<dynamic, dynamic>? nativeReport;
     Map<dynamic, dynamic>? antiTamperingReport;
+    Map<String, dynamic> hostileEnvironmentReport = const {};
     var nativeCheckFailed = false;
 
     try {
@@ -44,6 +47,10 @@ class AuraSecurityEngine {
       nativeCheckFailed = true;
     }
 
+    hostileEnvironmentReport = await checkHostileEnvironment();
+    nativeCheckFailed = nativeCheckFailed ||
+        hostileEnvironmentReport['environmentCheckFailed'] == true;
+
     final rootBinaryFound = await _hasRootBinary();
     final debuggerDetected = nativeReport?['isDebuggerConnected'] == true ||
         antiTamperingReport?['isDebuggerConnected'] == true;
@@ -53,13 +60,15 @@ class AuraSecurityEngine {
     final debuggerBlocked = antiTamperingReport?['debuggerBlocked'] == true;
     final signatureValid = antiTamperingReport?['signatureValid'] == true;
     final antiTamperingFailed = antiTamperingReport?['isSecure'] == false;
+    final hostileEnvironment = hostileEnvironmentReport['isHostile'] == true;
     final compromised =
         rootBinaryFound ||
         debuggerBlocked ||
         alteredEnvironment ||
         fridaDetected ||
         adbBlocked ||
-        antiTamperingFailed;
+      antiTamperingFailed ||
+      hostileEnvironment;
     final level = compromised
         ? SystemThreatLevel.critical
         : nativeCheckFailed
@@ -68,7 +77,9 @@ class AuraSecurityEngine {
 
     return {
       'level': level,
-      'logs': compromised
+        'logs': hostileEnvironment
+          ? 'ALERTA MÁXIMA: entorno emulado o depurador activo detectado.'
+          : compromised
           ? 'ALERTA: indicador de root, debugger o entorno alterado detectado.'
           : nativeCheckFailed
               ? 'AVISO: no se pudo completar la comprobación nativa de integridad.'
@@ -84,8 +95,38 @@ class AuraSecurityEngine {
       'antiTamperingCheckFailed': antiTamperingFailed,
       'localDebugFallback':
           antiTamperingReport?['localDebugFallback'] == true,
+      'hostileEnvironment': hostileEnvironment,
+      'isEmulator': hostileEnvironmentReport['isEmulator'] == true,
+      'environmentDebuggerConnected':
+          hostileEnvironmentReport['isDebuggerConnected'] == true,
+      'environmentIndicators':
+          hostileEnvironmentReport['indicators'] ?? const <String>[],
       'timestamp': DateTime.now().toUtc().toIso8601String(),
     };
+  }
+
+  Future<Map<String, dynamic>> checkHostileEnvironment() async {
+    try {
+      final report = await _securityChannel.invokeMapMethod<String, dynamic>(
+        'checkHostileEnvironment',
+      );
+      if (report == null) throw const FormatException('Informe nativo vacío.');
+      return report;
+    } on PlatformException {
+      return const {'isHostile': false, 'environmentCheckFailed': true};
+    } on MissingPluginException {
+      return const {'isHostile': false, 'environmentCheckFailed': true};
+    }
+  }
+
+  Future<Map<String, dynamic>> scanActiveSensitiveServices() async {
+    final report = await _securityChannel.invokeMapMethod<String, dynamic>(
+      'scanActiveSensitiveServices',
+    );
+    if (report == null) {
+      throw const FormatException('El escáner de aplicaciones devolvió un informe vacío.');
+    }
+    return report;
   }
 
   Stream<Map<String, dynamic>> monitorDeviceIntegrity({
