@@ -6,6 +6,7 @@ class AuraSecureVault {
   static const String _entryPrefix = 'aura_threat_log_';
   static const String _geminiApiKeyStorageKey = 'aura_gemini_api_key';
   static const int _maxEntries = 500;
+  static int _lastEntryTimestamp = 0;
 
   // EncryptedSharedPreferences uses Android Keystore; hardware backing is device-dependent.
   static const AndroidOptions _androidOptions = AndroidOptions(
@@ -34,14 +35,28 @@ class AuraSecureVault {
       _storage.delete(key: _geminiApiKeyStorageKey);
 
   Future<void> writeLogSecurely(String logText) async {
-    final key = '$_entryPrefix${DateTime.now().microsecondsSinceEpoch}';
-    final value = jsonEncode({
-      'event': logText,
-      'timestamp': DateTime.now().toUtc().toIso8601String(),
-    });
+    await writeLogsSecurely([logText]);
+  }
 
-    await _storage.write(key: key, value: value);
-    await _pruneOldEntries();
+  Future<void> writeLogsSecurely(Iterable<String> logTexts) async {
+    var wroteAny = false;
+    for (final logText in logTexts) {
+      final currentTimestamp = DateTime.now().microsecondsSinceEpoch;
+      final entryTimestamp = currentTimestamp > _lastEntryTimestamp
+          ? currentTimestamp
+          : _lastEntryTimestamp + 1;
+      _lastEntryTimestamp = entryTimestamp;
+      final value = jsonEncode({
+        'event': logText,
+        'timestamp': DateTime.now().toUtc().toIso8601String(),
+      });
+      await _storage.write(
+        key: '$_entryPrefix$entryTimestamp',
+        value: value,
+      );
+      wroteAny = true;
+    }
+    if (wroteAny) await _pruneOldEntries();
   }
 
   Future<List<Map<String, dynamic>>> readLogsSecurely() async {

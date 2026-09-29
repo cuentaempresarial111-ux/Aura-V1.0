@@ -6,6 +6,7 @@ import 'voice_engine.dart';
 import 'ai_brain.dart';
 import 'radar_waves.dart';
 import 'secure_vault.dart';
+import 'network_auditor.dart';
 
 void main() => runApp(const AuraApp());
 
@@ -40,6 +41,7 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
   final AuraVoiceEngine _voiceEngine = AuraVoiceEngine();
   final AuraAIBrain _aiBrain = AuraAIBrain();
   final AuraSecureVault _secureVault = AuraSecureVault();
+  final AuraNetworkAuditor _networkAuditor = AuraNetworkAuditor();
   final TextEditingController _inputController = TextEditingController();
 
   String _securityStatus = "SECURE";
@@ -91,6 +93,7 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
     _integritySubscription.cancel();
     _voiceEngine.stop();
     _inputController.dispose();
+    unawaited(_networkAuditor.dispose());
     super.dispose();
   }
 
@@ -351,6 +354,12 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
                   children: [
                     _buildActionButton(
                         "ESCANEAR", _triggerLocalScan, const Color(0xFF06B6D4)),
+                    IconButton(
+                      tooltip: 'Analizar eventos DNS recientes',
+                      icon: Icon(Icons.analytics_outlined,
+                          color: _getCoreColor()),
+                      onPressed: _triggerNetworkAnalysis,
+                    ),
                     _buildShieldButton(),
                   ],
                 ),
@@ -376,6 +385,31 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
       onPressed: _securityStatus == "SCANNING" ? null : action,
       child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
     );
+  }
+
+  void _triggerNetworkAnalysis() async {
+    if (_networkAuditor.recentEventCount == 0) {
+      setState(() => _liveConsoleLogs = 'Todavía no hay eventos DNS para analizar.');
+      return;
+    }
+
+    setState(() {
+      _aiProcessing = true;
+      _liveConsoleLogs = 'Aura está analizando la telemetría DNS reciente...';
+    });
+    try {
+      final payload = _networkAuditor.buildTelemetryPayload(limit: 100);
+      final response = await _analyzeWithStoredKey(
+        'Analiza estos eventos DNS. Distingue eventos bloqueados y permitidos, '
+        'y advierte que source_app puede ser uid-unavailable. JSON: $payload',
+      );
+      if (!mounted) return;
+      setState(() => _liveConsoleLogs = response);
+      await _writeSecureLog('Análisis DNS: $response');
+      _voiceEngine.speak(response);
+    } finally {
+      if (mounted) setState(() => _aiProcessing = false);
+    }
   }
 
   Widget _buildShieldButton() {

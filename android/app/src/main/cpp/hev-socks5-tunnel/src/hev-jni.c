@@ -7,7 +7,7 @@
  ============================================================================
  */
 
-#ifdef ANDROID
+#ifdef __ANDROID__
 
 #include <jni.h>
 #include <pthread.h>
@@ -48,6 +48,8 @@ struct _ThreadData
 static atomic_int is_running;
 static int thread_joinable;
 static JavaVM *java_vm;
+static jclass tproxy_class;
+static jmethodID dns_event_method;
 static pthread_t work_thread;
 static pthread_mutex_t mutex;
 static pthread_key_t current_jni_env;
@@ -91,16 +93,62 @@ JNI_OnLoad (JavaVM *vm, void *reserved)
     klass = (*env)->FindClass (env, STR (PKGNAME) "/" STR (CLSNAME));
     if (!klass)
         return JNI_ERR;
+    tproxy_class = (*env)->NewGlobalRef (env, klass);
+    dns_event_method = (*env)->GetStaticMethodID (
+        env, klass, "dispatchDnsEvent",
+        "(Ljava/lang/String;ILjava/lang/String;I)V");
     res = (*env)->RegisterNatives (env, klass, native_methods,
                                    N_ELEMENTS (native_methods));
     (*env)->DeleteLocalRef (env, klass);
-    if (res < 0)
+    if (res < 0 || !tproxy_class || !dns_event_method)
         return JNI_ERR;
 
     pthread_key_create (&current_jni_env, detach_current_thread);
     pthread_mutex_init (&mutex, NULL);
 
     return JNI_VERSION_1_4;
+}
+
+void
+hev_jni_report_dns_event (const char *domain, int action,
+                          uint32_t source_ipv4, uint16_t source_port)
+{
+    JNIEnv *env = NULL;
+    char source_address[INET_ADDRSTRLEN] = "0.0.0.0";
+    jstring java_domain;
+    jstring java_source_address;
+    int attached = 0;
+    jint status;
+
+    if (!java_vm || !tproxy_class || !dns_event_method)
+        return;
+    if (source_ipv4)
+        inet_ntop (AF_INET, &source_ipv4, source_address, sizeof (source_address));
+
+    status = (*java_vm)->GetEnv (java_vm, (void **)&env, JNI_VERSION_1_4);
+    if (status == JNI_EDETACHED) {
+        if ((*java_vm)->AttachCurrentThread (java_vm, (void **)&env, NULL) != JNI_OK)
+            return;
+        attached = 1;
+    } else if (status != JNI_OK) {
+        return;
+    }
+
+    java_domain = (*env)->NewStringUTF (env, domain);
+    java_source_address = (*env)->NewStringUTF (env, source_address);
+    if (java_domain && java_source_address) {
+        (*env)->CallStaticVoidMethod (env, tproxy_class, dns_event_method,
+                                     java_domain, (jint)action,
+                                     java_source_address, (jint)source_port);
+        if ((*env)->ExceptionCheck (env))
+            (*env)->ExceptionClear (env);
+    }
+    if (java_domain)
+        (*env)->DeleteLocalRef (env, java_domain);
+    if (java_source_address)
+        (*env)->DeleteLocalRef (env, java_source_address);
+    if (attached)
+        (*java_vm)->DetachCurrentThread (java_vm);
 }
 
 static void *

@@ -16,7 +16,9 @@ La aplicación está diseñada para operar sin acceso root. El escudo VPN requie
 
 - **Cerebro de IA integrado:** conecta con Gemini, usando `gemini-2.5-flash` de forma predeterminada, para responder consultas y analizar hallazgos. El servicio auxiliar empaqueta la telemetría como JSON; la pantalla principal también puede enviar consultas de texto y procesar llamadas a herramientas.
 - **Bóveda local:** persiste la clave de Gemini y hasta 500 registros con `flutter_secure_storage`. En Android se habilita `encryptedSharedPreferences`; el proyecto no especifica ni garantiza explícitamente que el cifrado esté respaldado por hardware.
-- **Auditoría de conectividad:** incluye una utilidad que publica cambios del estado del escudo mediante un `Stream` y comprueba la resolución DNS de `cloudflare.com` bajo demanda. No es una inspección continua del tráfico de red.
+- **Inspección DNS local:** el endpoint `10.0.0.3:53/UDP` del túnel procesa consultas DNS dentro de `hev-mapped-dns`, aplica una heurística estructural DGA y responde localmente a las coincidencias con `127.0.0.1` o `::1`.
+- **Telemetría asíncrona:** el motor nativo envía eventos `{timestamp, source_app, requested_domain, action}` por `EventChannel`. Kotlin usa colas limitadas y resuelve el UID fuera del hilo TUN; Dart mantiene un anillo de 500 eventos y persiste lotes en la bóveda cifrada.
+- **Análisis de auditoría:** la pantalla puede enviar bajo demanda hasta 100 eventos recientes como JSON a Gemini; la telemetría no se remite a la IA automáticamente por cada consulta DNS.
 - **Comprobación de integridad:** combina resultados de canales nativos Android con comprobaciones locales de indicadores como binarios `su`, depuración, entorno virtual y manipulación.
 - **Interfaz de voz:** lee respuestas y alertas en español mediante `flutter_tts`.
 - **Radar animado:** representa visualmente el estado de escaneo con un componente `CustomPainter`.
@@ -32,7 +34,7 @@ La aplicación está diseñada para operar sin acceso root. El escudo VPN requie
 | [`ai_brain.dart`](lib/ai_brain.dart) | Integración principal con Gemini. Gestiona la clave, prepara el modelo y las herramientas, procesa llamadas a funciones y usa `MethodChannel` para solicitar telemetría y controlar el escudo. |
 | [`security_engine.dart`](lib/security_engine.dart) | Consulta comprobaciones de integridad a los canales nativos, busca determinados binarios `su` y emite un stream periódico de estado, cada cinco segundos de forma predeterminada. |
 | [`secure_vault.dart`](lib/secure_vault.dart) | Guarda y recupera la clave de Gemini y los registros de auditoría usando `flutter_secure_storage`; limita el historial a 500 registros. |
-| [`network_auditor.dart`](lib/network_auditor.dart) | Proporciona un stream de cambios del estado del escudo y una comprobación DNS puntual de `cloudflare.com`. Es una utilidad auxiliar, no un monitor continuo de tráfico. |
+| [`network_auditor.dart`](lib/network_auditor.dart) | Consume el `EventChannel` de eventos DNS, valida y expone eventos tipados, mantiene un búfer acotado, persiste en lotes y genera payloads JSON para el análisis bajo demanda. |
 | [`voice_engine.dart`](lib/voice_engine.dart) | Configura `flutter_tts` en español (`es-ES`) y ofrece métodos para leer texto o detener la reproducción. |
 | [`radar_waves.dart`](lib/radar_waves.dart) | Dibuja ondas animadas de radar con `CustomPainter`, utilizadas durante el escaneo. |
 | [`services/aura_core.dart`](lib/services/aura_core.dart) | Servicio auxiliar que solicita telemetría Android y coordina su análisis proactivo, gestionando errores de plataforma y formato. |
@@ -82,9 +84,11 @@ El workflow `android-build` de [`codemagic.yaml`](codemagic.yaml) automatiza la 
 ## 🔐 Consideraciones de seguridad
 
 - El modo sin root evita depender de privilegios de superusuario, pero no elimina la necesidad de permisos Android ni de la autorización del usuario para iniciar el servicio VPN.
+- La inspección implementada cubre consultas DNS UDP/53 recibidas por el endpoint configurado. No descifra DNS-over-HTTPS ni DNS-over-TLS; otros mecanismos de resolución no son evaluados por esta heurística.
+- El criterio DGA actual es una heurística local sobre etiquetas largas con alta diversidad de caracteres y dígitos. No equivale a inteligencia de amenazas, reputación de dominios ni una garantía de detección de malware.
+- `ConnectivityManager.getConnectionOwnerUid` puede no devolver un UID para el tuple observado. En ese caso el evento registra `uid-unavailable`; no se atribuye una aplicación por conjetura.
 - La protección de `flutter_secure_storage` depende de la implementación de la plataforma. La configuración actual habilita `encryptedSharedPreferences`, pero no acredita por sí sola cifrado respaldado por hardware.
 - `secure_vault_core.dart` contiene una alternativa XOR que no es adecuada para secretos. La bóveda usada por el flujo principal es `secure_vault.dart`.
-- La comprobación DNS de `network_auditor.dart` valida resolución de nombres en una llamada puntual; no analiza paquetes ni demuestra que el tráfico esté libre de amenazas.
 
 ---
 

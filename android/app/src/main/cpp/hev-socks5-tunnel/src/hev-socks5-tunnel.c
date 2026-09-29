@@ -275,6 +275,7 @@ dns_recv_handler (void *arg, struct udp_pcb *pcb, struct pbuf *p,
 {
     HevMappedDNS *dns = arg;
     struct pbuf *b;
+    uint8_t packet[UDP_BUF_SIZE];
     int res;
 
     LOG_D ("%p mapped dns handle", dns);
@@ -282,8 +283,15 @@ dns_recv_handler (void *arg, struct udp_pcb *pcb, struct pbuf *p,
     b = pbuf_alloc (PBUF_TRANSPORT, UDP_BUF_SIZE, PBUF_RAM);
     if (!b)
         goto exit;
+    if (p->tot_len > sizeof (packet) ||
+        pbuf_copy_partial (p, packet, p->tot_len, 0) != p->tot_len)
+        goto free;
 
-    res = hev_mapped_dns_handle (dns, p->payload, p->len, b->payload, b->len);
+    res = hev_mapped_dns_handle (
+        dns, packet, p->tot_len, b->payload, b->len,
+        pcb->remote_ip.type == IPADDR_TYPE_V4
+            ? ip_2_ip4 (&pcb->remote_ip)->addr : 0,
+        pcb->remote_port);
     if (res < 0)
         goto free;
 
@@ -318,7 +326,7 @@ udp_recv_handler (void *arg, struct udp_pcb *pcb, struct pbuf *p,
     if (dns && addr->type == IPADDR_TYPE_V4) {
         int faddr = hev_config_get_mapdns_address ();
         int fport = hev_config_get_mapdns_port ();
-        if (fport == port && faddr == ip_2_ip4 (addr)->addr) {
+        if (fport == port && (uint32_t)faddr == ip_2_ip4 (addr)->addr) {
             udp_recv (pcb, dns_recv_handler, dns);
             return;
         }

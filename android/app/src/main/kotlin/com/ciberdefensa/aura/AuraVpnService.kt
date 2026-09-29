@@ -99,9 +99,7 @@ class AuraVpnService : VpnService() {
                 .addAddress("fd00::2", 64)
                 .addRoute("0.0.0.0", 0)
                 .addRoute("::", 0)
-                .addDnsServer("1.1.1.1")
-                .addDnsServer("1.0.0.1")
-                .addDnsServer("2606:4700:4700::1111")
+                .addDnsServer("10.0.0.3")
                 .addDisallowedApplication(packageName)
 
             established = builder.establish()
@@ -120,8 +118,14 @@ class AuraVpnService : VpnService() {
                   port: $SOCKS5_PORT
                   address: $proxyAddress
                   udp: 'udp'
-                misc:
-                  log-level: error
+misc:
+    log-level: error
+mapdns:
+    address: 10.0.0.3
+    port: 53
+    network: 100.64.0.0
+    netmask: 255.192.0.0
+    cache-size: 8192
                 """.trimIndent(),
             )
 

@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <arpa/inet.h>
 
 #include <hev-compiler.h>
@@ -20,6 +21,20 @@
 #include "hev-mapped-dns.h"
 
 static HevMappedDNS *singleton;
+
+#ifdef __ANDROID__
+extern void hev_jni_report_dns_event (const char *domain, int action,
+                                      uint32_t source_ipv4,
+                                      uint16_t source_port);
+#endif
+
+enum
+{
+    DNS_EVENT_ALLOWED = 0,
+    DNS_EVENT_BLOCKED = 1,
+    DNS_MAX_QUESTIONS = 32,
+    DNS_MAX_NAME = 253,
+};
 
 typedef struct _DNSHdr DNSHdr;
 
@@ -175,85 +190,178 @@ write_u32 (uint8_t *p, uint32_t v)
     p[3] = v;
 }
 
+static int
+read_qname (const uint8_t *packet, int packet_len, int *offset,
+            char domain[DNS_MAX_NAME + 1])
+{
+    int off = *offset;
+    int name_len = 0;
+
+    for (;;) {
+        int label_len;
+        int i;
+
+        if (off >= packet_len)
+            return -1;
+        label_len = packet[off++];
+        if (!label_len)
+            break;
+        if ((label_len & 0xc0) || label_len > 63 ||
+            off + label_len > packet_len)
+            return -1;
+        if (name_len && name_len + 1 >= DNS_MAX_NAME)
+            return -1;
+        if (name_len)
+            domain[name_len++] = '.';
+        if (name_len + label_len > DNS_MAX_NAME)
+            return -1;
+        for (i = 0; i < label_len; i++) {
+            const unsigned char ch = packet[off++];
+            if (ch <= 0x20 || ch >= 0x7f)
+                return -1;
+            domain[name_len++] = (char)tolower (ch);
+        }
+    }
+
+    if (!name_len)
+        return -1;
+    domain[name_len] = '\0';
+    *offset = off;
+    return 0;
+}
+
+static int
+domain_is_suspicious (const char *domain)
+{
+    const char *label = domain;
+
+    while (*label) {
+        unsigned char seen[128] = { 0 };
+        const char *end = strchr (label, '.');
+        const size_t length = end ? (size_t)(end - label) : strlen (label);
+        size_t i;
+        unsigned int digits = 0;
+        unsigned int unique = 0;
+
+        if (length >= 40) {
+            for (i = 0; i < length; i++) {
+                const unsigned char ch = (unsigned char)label[i];
+                if (ch < sizeof (seen) && !seen[ch]) {
+                    seen[ch] = 1;
+                    unique++;
+                }
+                if (ch >= '0' && ch <= '9')
+                    digits++;
+            }
+            if (unique >= 20 && digits >= 4)
+                return 1;
+        }
+
+        if (!end)
+            break;
+        label = end + 1;
+    }
+
+    return 0;
+}
+
 int
 hev_mapped_dns_handle (HevMappedDNS *self, void *req, int qlen, void *res,
-                       int slen)
+                       int slen, uint32_t source_ipv4, uint16_t source_port)
 {
-    DNSHdr *qhdr = req;
-    DNSHdr *shdr = res;
-    uint8_t *rb = req;
+    typedef struct
+    {
+        int name_offset;
+        uint16_t type;
+        uint16_t class;
+        char name[DNS_MAX_NAME + 1];
+    } DNSQuestion;
+    const uint8_t *rb = req;
     uint8_t *sb = res;
-    int ips[32];
-    int ipo[32];
-    int ipn = 0;
+    DNSQuestion questions[DNS_MAX_QUESTIONS];
+    uint16_t qd;
+    uint16_t query_flags;
+    uint16_t answer_count = 0;
+    int rcode = 0;
     int off;
     int i;
 
-    if (slen < qlen)
+    if (qlen < 0 || (size_t)qlen < sizeof (DNSHdr))
         return -1;
-    if (qlen < sizeof (DNSHdr))
-        return -1;
-
-    memcpy (res, req, qlen);
-    qhdr->qd = ntohs (qhdr->qd);
-    shdr->fl = ntohs (shdr->fl);
-    shdr->ns = 0;
-    shdr->an = 0;
-    shdr->ar = 0;
-
-    if (qhdr->qd > 32)
+    qd = read_u16 (rb + 4);
+    query_flags = read_u16 (rb + 2);
+    if (!qd || qd > DNS_MAX_QUESTIONS || (query_flags & 0x8000))
         return -1;
 
     off = sizeof (DNSHdr);
-    for (i = 0; i < qhdr->qd; i++) {
-        ipo[ipn] = off;
-
-        if (off >= qlen)
+    for (i = 0; i < qd; i++) {
+        questions[i].name_offset = off;
+        if (read_qname (rb, qlen, &off, questions[i].name) < 0 ||
+            off + 4 > qlen)
             return -1;
-
-        while (rb[off]) {
-            int poff = off;
-
-            off += 1 + rb[off];
-            if (off >= qlen)
-                return -1;
-
-            rb[poff] = '.';
-        }
-
-        off++;
-        if ((off + 3) >= qlen)
-            return -1;
-
-        if ((read_u16 (&rb[off + 0]) == 1) && (read_u16 (&rb[off + 2]) == 1)) {
-            int idx;
-
-            idx = hev_mapped_dns_find (self, (char *)&rb[ipo[ipn] + 1]);
-            if (idx >= 0) {
-                ips[ipn] = self->net | idx;
-                ipn++;
-            }
-        }
-
+        questions[i].type = read_u16 (rb + off);
+        questions[i].class = read_u16 (rb + off + 2);
         off += 4;
     }
 
-    for (i = 0; i < ipn; i++) {
-        if ((off + 15) >= slen)
+    if (off > slen)
+        return -1;
+    memcpy (sb, rb, off);
+    for (i = 0; i < qd; i++) {
+        const int blocked = questions[i].class == 1 &&
+            domain_is_suspicious (questions[i].name);
+        uint16_t answer_type = questions[i].type;
+        int answer_len;
+        uint32_t mapped_ip;
+        int idx;
+
+#ifdef __ANDROID__
+        hev_jni_report_dns_event (questions[i].name,
+                                  blocked ? DNS_EVENT_BLOCKED : DNS_EVENT_ALLOWED,
+                                  source_ipv4, source_port);
+#endif
+
+        if (questions[i].class != 1)
+            continue;
+        if (blocked && answer_type != 1 && answer_type != 28) {
+            rcode = 3;
+            continue;
+        }
+        if (!blocked && answer_type != 1)
+            continue;
+
+        if (blocked) {
+            mapped_ip = 0x7f000001;
+            answer_len = answer_type == 1 ? 4 : 16;
+        } else {
+            idx = hev_mapped_dns_find (self, questions[i].name);
+            if (idx < 0)
+                continue;
+            mapped_ip = (uint32_t)(self->net | idx);
+            answer_len = 4;
+        }
+
+        if (off + 12 + answer_len > slen || questions[i].name_offset >= 0x4000)
             return -1;
-
-        write_u16 (&sb[off + 0], 0xc000 | ipo[i]);
-        write_u16 (&sb[off + 2], 1);
-        write_u16 (&sb[off + 4], 1);
-        write_u32 (&sb[off + 6], 1);
-        write_u16 (&sb[off + 10], 4);
-        write_u32 (&sb[off + 12], ips[i]);
-
-        off += 16;
+        write_u16 (sb + off, (uint16_t)(0xc000 | questions[i].name_offset));
+        write_u16 (sb + off + 2, answer_type);
+        write_u16 (sb + off + 4, 1);
+        write_u32 (sb + off + 6, blocked ? 60 : 1);
+        write_u16 (sb + off + 10, (uint16_t)answer_len);
+        if (answer_type == 1) {
+            write_u32 (sb + off + 12, mapped_ip);
+        } else {
+            memset (sb + off + 12, 0, 16);
+            sb[off + 27] = 1;
+        }
+        off += 12 + answer_len;
+        answer_count++;
     }
 
-    shdr->fl = htons (shdr->fl | 0x8000 | ((shdr->fl & 0x100) >> 1));
-    shdr->an = htons (ipn);
+    write_u16 (sb + 2, (uint16_t)(0x8080 | (query_flags & 0x7910) | rcode));
+    write_u16 (sb + 6, answer_count);
+    write_u16 (sb + 8, 0);
+    write_u16 (sb + 10, 0);
 
     return off;
 }

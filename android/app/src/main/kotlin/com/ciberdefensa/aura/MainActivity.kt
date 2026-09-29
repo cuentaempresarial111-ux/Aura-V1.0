@@ -15,6 +15,7 @@ import java.security.KeyStore
 import java.security.MessageDigest
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 object AuraAntiTampering {
@@ -146,6 +147,7 @@ class MainActivity: FlutterActivity() {
     private val SHIELD_CHANNEL = "com.ciberdefensa.aura/shield"
     private val TELEMETRY_CHANNEL = "com.ciberdefensa.aura/telemetry"
     private val ANTI_TAMPERING_CHANNEL = "com.ciberdefensa.aura/anti_tampering"
+    private val NETWORK_STREAM_CHANNEL = "com.aura.cyberdefense/network_stream"
     private var pendingShieldResult: MethodChannel.Result? = null
     private var vpnReceiverRegistered = false
     private val vpnStateReceiver = object : BroadcastReceiver() {
@@ -161,6 +163,11 @@ class MainActivity: FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         registerVpnReceiver()
+        AuraNetworkStream.setApplicationContext(applicationContext)
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            NETWORK_STREAM_CHANNEL,
+        ).setStreamHandler(AuraNetworkStream)
 
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,

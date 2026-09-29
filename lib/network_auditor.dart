@@ -1,13 +1,106 @@
 import 'dart:async';
+import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
+
+import 'ai_brain.dart';
+import 'secure_vault.dart';
+
+enum NetworkAuditAction { blocked, allowed }
+
+class NetworkAuditEvent {
+  const NetworkAuditEvent({
+    required this.timestamp,
+    required this.sourceApp,
+    required this.requestedDomain,
+    required this.action,
+  });
+
+  final int timestamp;
+  final String sourceApp;
+  final String requestedDomain;
+  final NetworkAuditAction action;
+
+  factory NetworkAuditEvent.fromPlatform(Object? value) {
+    if (value is! Map) {
+      throw const FormatException('El evento de red no es un mapa.');
+    }
+
+    final timestamp = value['timestamp'];
+    final sourceApp = value['source_app'];
+    final requestedDomain = value['requested_domain'];
+    final action = value['action'];
+    if (timestamp is! num || sourceApp is! String ||
+        requestedDomain is! String || (action != 'BLOCKED' && action != 'ALLOWED')) {
+      throw const FormatException('El evento de red tiene campos inválidos.');
+    }
+
+    return NetworkAuditEvent(
+      timestamp: timestamp.toInt(),
+      sourceApp: sourceApp,
+      requestedDomain: requestedDomain,
+      action: action == 'BLOCKED'
+          ? NetworkAuditAction.blocked
+          : NetworkAuditAction.allowed,
+    );
+  }
+
+  Map<String, Object> toJson() => {
+        'timestamp': timestamp,
+        'source_app': sourceApp,
+        'requested_domain': requestedDomain,
+        'action': action == NetworkAuditAction.blocked ? 'BLOCKED' : 'ALLOWED',
+      };
+}
+
 class AuraNetworkAuditor {
-  final StreamController<bool> _networkShieldController = StreamController<bool>.broadcast();
+  static const EventChannel _networkEvents =
+      EventChannel('com.aura.cyberdefense/network_stream');
+  static const int _maxRecentEvents = 500;
+  static const int _maxPendingWrites = 256;
+  static const int _writeBatchSize = 32;
+
+  final StreamController<bool> _networkShieldController =
+      StreamController<bool>.broadcast();
+  final StreamController<NetworkAuditEvent> _eventController =
+      StreamController<NetworkAuditEvent>.broadcast();
+  final Queue<NetworkAuditEvent> _recentEvents = Queue<NetworkAuditEvent>();
+  final Queue<Map<String, Object>> _pendingWrites =
+      Queue<Map<String, Object>>();
+  final AuraSecureVault _secureVault;
+  final AuraAIBrain _aiBrain;
+
+  StreamSubscription<Object?>? _nativeSubscription;
+  Future<void> _writeTask = Future<void>.value();
+  bool _writing = false;
+  bool _disposed = false;
+  int _droppedPendingWrites = 0;
+
+  AuraNetworkAuditor({AuraSecureVault? secureVault, AuraAIBrain? aiBrain})
+      : _secureVault = secureVault ?? AuraSecureVault(),
+        _aiBrain = aiBrain ?? AuraAIBrain() {
+    start();
+  }
 
   Stream<bool> get shieldStateStream => _networkShieldController.stream;
+  Stream<NetworkAuditEvent> get eventStream => _eventController.stream;
+  int get recentEventCount => _recentEvents.length;
+  int get droppedPendingWrites => _droppedPendingWrites;
+
+  void start() {
+    if (_disposed || _nativeSubscription != null) return;
+    _nativeSubscription = _networkEvents.receiveBroadcastStream().listen(
+      _handlePlatformEvent,
+      onError: (Object error, StackTrace stackTrace) {
+        if (!_disposed) _eventController.addError(error, stackTrace);
+      },
+    );
+  }
 
   void toggleNetworkShield(bool active) {
-    _networkShieldController.add(active);
+    if (!_disposed) _networkShieldController.add(active);
   }
 
   Future<bool> verifyGatewaySafety() async {
@@ -17,6 +110,78 @@ class AuraNetworkAuditor {
           addresses.any((address) => address.rawAddress.isNotEmpty);
     } on SocketException {
       return false;
+    }
+  }
+
+  String buildTelemetryPayload({int limit = 100}) {
+    if (limit < 1 || limit > _maxRecentEvents) {
+      throw RangeError.range(limit, 1, _maxRecentEvents, 'limit');
+    }
+    final events = _recentEvents.toList();
+    final selected = events.skip(events.length > limit ? events.length - limit : 0);
+    return jsonEncode({
+      'event_type': 'network_dns_audit',
+      'events': selected.map((event) => event.toJson()).toList(),
+    });
+  }
+
+  Future<String> analyzeRecentNetworkEvents({int limit = 100}) =>
+      _aiBrain.analyzeCyberThreat(buildTelemetryPayload(limit: limit));
+
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    await _nativeSubscription?.cancel();
+    _nativeSubscription = null;
+    await _writeTask;
+    await _eventController.close();
+    await _networkShieldController.close();
+  }
+
+  void _handlePlatformEvent(Object? value) {
+    if (_disposed) return;
+
+    late final NetworkAuditEvent event;
+    try {
+      event = NetworkAuditEvent.fromPlatform(value);
+    } on FormatException catch (error, stackTrace) {
+      _eventController.addError(error, stackTrace);
+      return;
+    }
+    if (_recentEvents.length == _maxRecentEvents) _recentEvents.removeFirst();
+    _recentEvents.addLast(event);
+    _eventController.add(event);
+
+    if (_pendingWrites.length == _maxPendingWrites) {
+      _pendingWrites.removeFirst();
+      _droppedPendingWrites++;
+    }
+    _pendingWrites.addLast(event.toJson());
+    _drainWrites();
+  }
+
+  void _drainWrites() {
+    if (_writing || _pendingWrites.isEmpty) return;
+    _writing = true;
+    _writeTask = _writePendingEvents();
+  }
+
+  Future<void> _writePendingEvents() async {
+    try {
+      while (_pendingWrites.isNotEmpty) {
+        final batch = <String>[];
+        while (_pendingWrites.isNotEmpty && batch.length < _writeBatchSize) {
+          batch.add(jsonEncode(_pendingWrites.removeFirst()));
+        }
+        try {
+          await _secureVault.writeLogsSecurely(batch);
+        } catch (_) {
+          _droppedPendingWrites += batch.length;
+        }
+      }
+    } finally {
+      _writing = false;
+      if (_pendingWrites.isNotEmpty) _drainWrites();
     }
   }
 }
