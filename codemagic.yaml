@@ -15,13 +15,18 @@ workflows:
     scripts:
       - name: Set up local.properties
         script: |
-          echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
+          set -euo pipefail
+          cd "${CM_BUILD_DIR:?CM_BUILD_DIR is required}"
+          : "${FLUTTER_ROOT:?FLUTTER_ROOT is required}"
+          printf 'flutter.sdk=%s\n' "$FLUTTER_ROOT" > android/local.properties
       - name: Build Android APK (Release)
         script: |
+          set -euo pipefail
+          cd "${CM_BUILD_DIR:?CM_BUILD_DIR is required}"
           flutter clean
           flutter pub get
-          flutter build apk --release \
-            --dart-define=GEMINI_MODEL="${GEMINI_MODEL:-gemini-2.5-flash}"
+          gemini_model="${GEMINI_MODEL:-gemini-2.5-flash}"
+          flutter build apk --release --dart-define="GEMINI_MODEL=${gemini_model}"
     artifacts:
       - build/app/outputs/flutter-apk/*.apk
       

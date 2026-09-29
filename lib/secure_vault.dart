@@ -7,13 +7,17 @@ class AuraSecureVault {
   static const String _geminiApiKeyStorageKey = 'aura_gemini_api_key';
   static const int _maxEntries = 500;
 
+  // EncryptedSharedPreferences uses Android Keystore; hardware backing is device-dependent.
+  static const AndroidOptions _androidOptions = AndroidOptions(
+    encryptedSharedPreferences: true,
+    resetOnError: false,
+  );
+
   final FlutterSecureStorage _storage;
 
   AuraSecureVault({FlutterSecureStorage? storage})
       : _storage = storage ??
-            const FlutterSecureStorage(
-              aOptions: AndroidOptions(encryptedSharedPreferences: true),
-            );
+            const FlutterSecureStorage(aOptions: _androidOptions);
 
   Future<void> saveGeminiApiKey(String apiKey) async {
     final normalizedApiKey = apiKey.trim();
