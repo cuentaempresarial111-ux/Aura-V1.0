@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'ai_brain.dart';
 import 'secure_vault.dart';
 
-enum NetworkAuditAction { blocked, allowed }
+enum NetworkAuditAction { blocked, dgaAlert, allowed }
 
 class NetworkAuditEvent {
   const NetworkAuditEvent({
@@ -33,7 +33,8 @@ class NetworkAuditEvent {
     final requestedDomain = value['requested_domain'];
     final action = value['action'];
     if (timestamp is! num || sourceApp is! String ||
-        requestedDomain is! String || (action != 'BLOCKED' && action != 'ALLOWED')) {
+      requestedDomain is! String ||
+      (action != 'BLOCKED' && action != 'DGA_ALERT' && action != 'ALLOWED')) {
       throw const FormatException('El evento de red tiene campos inválidos.');
     }
 
@@ -41,9 +42,11 @@ class NetworkAuditEvent {
       timestamp: timestamp.toInt(),
       sourceApp: sourceApp,
       requestedDomain: requestedDomain,
-      action: action == 'BLOCKED'
-          ? NetworkAuditAction.blocked
-          : NetworkAuditAction.allowed,
+      action: switch (action) {
+        'BLOCKED' => NetworkAuditAction.blocked,
+        'DGA_ALERT' => NetworkAuditAction.dgaAlert,
+        _ => NetworkAuditAction.allowed,
+      },
     );
   }
 
@@ -51,13 +54,19 @@ class NetworkAuditEvent {
         'timestamp': timestamp,
         'source_app': sourceApp,
         'requested_domain': requestedDomain,
-        'action': action == NetworkAuditAction.blocked ? 'BLOCKED' : 'ALLOWED',
+        'action': switch (action) {
+          NetworkAuditAction.blocked => 'BLOCKED',
+          NetworkAuditAction.dgaAlert => 'DGA_ALERT',
+          NetworkAuditAction.allowed => 'ALLOWED',
+        },
       };
 }
 
 class AuraNetworkAuditor {
   static const EventChannel _networkEvents =
       EventChannel('com.aura.cyberdefense/network_stream');
+    static const MethodChannel _engineChannel =
+      MethodChannel('com.aura.cyberdefense/engine');
   static const int _maxRecentEvents = 500;
   static const int _maxPendingWrites = 256;
   static const int _writeBatchSize = 32;
@@ -69,18 +78,22 @@ class AuraNetworkAuditor {
   final Queue<NetworkAuditEvent> _recentEvents = Queue<NetworkAuditEvent>();
   final Queue<Map<String, Object>> _pendingWrites =
       Queue<Map<String, Object>>();
+    final Queue<NetworkAuditEvent> _pendingThreatEvents =
+      Queue<NetworkAuditEvent>();
   final AuraSecureVault _secureVault;
-  final AuraAIBrain _aiBrain;
+    late final AuraAIBrain _aiBrain;
 
   StreamSubscription<Object?>? _nativeSubscription;
   Future<void> _writeTask = Future<void>.value();
   bool _writing = false;
+  bool _analyzingThreats = false;
   bool _disposed = false;
   int _droppedPendingWrites = 0;
 
   AuraNetworkAuditor({AuraSecureVault? secureVault, AuraAIBrain? aiBrain})
-      : _secureVault = secureVault ?? AuraSecureVault(),
-        _aiBrain = aiBrain ?? AuraAIBrain() {
+      : _secureVault = secureVault ?? AuraSecureVault() {
+    _aiBrain = aiBrain ?? AuraAIBrain();
+    _aiBrain.setDnsBlockRuleHandler(addDnsBlockRule);
     start();
   }
 
@@ -125,8 +138,8 @@ class AuraNetworkAuditor {
     });
   }
 
-  Future<String> analyzeRecentNetworkEvents({int limit = 100}) =>
-      _aiBrain.analyzeCyberThreat(buildTelemetryPayload(limit: limit));
+    Future<String> analyzeRecentNetworkEvents({int limit = 100}) =>
+      _aiBrain.analyzeThreatPayload(buildTelemetryPayload(limit: limit));
 
   Future<void> dispose() async {
     if (_disposed) return;
@@ -136,6 +149,7 @@ class AuraNetworkAuditor {
     await _writeTask;
     await _eventController.close();
     await _networkShieldController.close();
+    _pendingThreatEvents.clear();
   }
 
   void _handlePlatformEvent(Object? value) {
@@ -152,12 +166,52 @@ class AuraNetworkAuditor {
     _recentEvents.addLast(event);
     _eventController.add(event);
 
+    if (event.action == NetworkAuditAction.blocked ||
+        event.action == NetworkAuditAction.dgaAlert) {
+      if (_pendingThreatEvents.length < 64) {
+        _pendingThreatEvents.addLast(event);
+      }
+      _analyzePendingThreats();
+    }
+
     if (_pendingWrites.length == _maxPendingWrites) {
       _pendingWrites.removeFirst();
       _droppedPendingWrites++;
     }
     _pendingWrites.addLast(event.toJson());
     _drainWrites();
+  }
+
+  Future<bool> addDnsBlockRule(String domain) async {
+    final blocked = await _engineChannel.invokeMethod<bool>(
+      'addDnsBlockRule',
+      {'domain': domain},
+    );
+    return blocked ?? false;
+  }
+
+  void _analyzePendingThreats() {
+    if (_analyzingThreats || _disposed || _pendingThreatEvents.isEmpty) return;
+    _analyzingThreats = true;
+    unawaited(_drainThreatAnalysis());
+  }
+
+  Future<void> _drainThreatAnalysis() async {
+    try {
+      while (!_disposed && _pendingThreatEvents.isNotEmpty) {
+        final event = _pendingThreatEvents.removeFirst();
+        try {
+          await _aiBrain.analyzeThreatPayload(jsonEncode(event.toJson()));
+        } catch (_) {
+          // Keep the local event even if remote analysis is unavailable.
+        }
+      }
+    } finally {
+      _analyzingThreats = false;
+      if (!_disposed && _pendingThreatEvents.isNotEmpty) {
+        _analyzePendingThreats();
+      }
+    }
   }
 
   void _drainWrites() {

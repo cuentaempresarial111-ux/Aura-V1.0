@@ -35,6 +35,7 @@ enum
 {
     DNS_EVENT_ALLOWED = 0,
     DNS_EVENT_BLOCKED = 1,
+    DNS_EVENT_DGA_ALERT = 2,
     DNS_MAX_QUESTIONS = 32,
     DNS_MAX_NAME = 253,
     DNS_MAX_BLOCKED_DOMAINS = 256,
@@ -412,9 +413,10 @@ hev_mapped_dns_handle (HevMappedDNS *self, void *req, int qlen, void *res,
         return -1;
     memcpy (sb, rb, off);
     for (i = 0; i < qd; i++) {
+        const int dga_alert = questions[i].class == 1 &&
+            domain_is_suspicious (questions[i].name);
         const int blocked = questions[i].class == 1 &&
-            (hev_mapped_dns_is_blocked (questions[i].name) ||
-             domain_is_suspicious (questions[i].name));
+            (hev_mapped_dns_is_blocked (questions[i].name) || dga_alert);
         uint16_t answer_type = questions[i].type;
         int answer_len;
         uint32_t mapped_ip;
@@ -422,7 +424,9 @@ hev_mapped_dns_handle (HevMappedDNS *self, void *req, int qlen, void *res,
 
 #ifdef __ANDROID__
         hev_jni_report_dns_event (questions[i].name,
-                                  blocked ? DNS_EVENT_BLOCKED : DNS_EVENT_ALLOWED,
+                                  dga_alert ? DNS_EVENT_DGA_ALERT :
+                                      blocked ? DNS_EVENT_BLOCKED :
+                                                DNS_EVENT_ALLOWED,
                                   source_ipv4, source_port);
 #endif
 

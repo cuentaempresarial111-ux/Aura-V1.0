@@ -15,7 +15,7 @@ import java.util.concurrent.Executors
 private data class PendingDnsEvent(
     val timestamp: Long,
     val domain: String,
-    val blocked: Boolean,
+    val action: String,
     val sourceAddress: String,
     val sourcePort: Int,
 )
@@ -58,15 +58,20 @@ object AuraNetworkStream : EventChannel.StreamHandler {
 
     fun emitDnsEvent(
         domain: String,
-        blocked: Boolean,
+        actionCode: Int,
         sourceAddress: String,
         sourcePort: Int,
     ) {
+        val action = when (actionCode) {
+            2 -> "DGA_ALERT"
+            1 -> "BLOCKED"
+            else -> "ALLOWED"
+        }
         synchronized(lock) {
             if (pendingDnsEvents.size == MAX_PENDING_EVENTS) pendingDnsEvents.removeFirst()
             pendingDnsEvents.addLast(
                 PendingDnsEvent(
-                    System.currentTimeMillis(), domain, blocked, sourceAddress, sourcePort,
+                    System.currentTimeMillis(), domain, action, sourceAddress, sourcePort,
                 ),
             )
             if (!resolverScheduled) {
@@ -91,8 +96,9 @@ object AuraNetworkStream : EventChannel.StreamHandler {
                 "timestamp" to pending.timestamp,
                 "source_app" to resolveSourceApp(pending.sourceAddress, pending.sourcePort),
                 "requested_domain" to pending.domain,
-                "action" to if (pending.blocked) "BLOCKED" else "ALLOWED",
+                "action" to pending.action,
             )
+            AuraVpnService.recordDnsAuditEvent(event)
             synchronized(lock) {
                 if (pendingEvents.size == MAX_PENDING_EVENTS) pendingEvents.removeFirst()
                 pendingEvents.addLast(event)

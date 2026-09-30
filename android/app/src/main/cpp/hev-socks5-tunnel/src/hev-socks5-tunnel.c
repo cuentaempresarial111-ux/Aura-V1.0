@@ -43,6 +43,12 @@
 
 #include "hev-socks5-tunnel.h"
 
+#ifdef __ANDROID__
+extern void hev_jni_report_dns_event (const char *domain, int action,
+                                      uint32_t source_ipv4,
+                                      uint16_t source_port);
+#endif
+
 enum
 {
     SYNC_SEND = 1 << 0,
@@ -142,6 +148,106 @@ packet_ipv4_is_blocked (const struct pbuf *packet)
     pthread_mutex_unlock (&blocked_ipv4_mutex);
 
     return blocked;
+}
+
+static int
+is_ipv4_doh_resolver (const uint8_t *address)
+{
+    static const uint8_t resolvers[][4] = {
+        { 1, 1, 1, 1 }, { 1, 0, 0, 1 },
+        { 8, 8, 8, 8 }, { 8, 8, 4, 4 },
+        { 9, 9, 9, 9 },
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof (resolvers) / sizeof (resolvers[0]); i++) {
+        if (memcmp (address, resolvers[i], sizeof (resolvers[i])) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int
+packet_is_encrypted_dns (const struct pbuf *packet)
+{
+    uint8_t header[60];
+    uint8_t transport[4];
+    uint8_t version;
+    uint8_t protocol;
+    uint16_t destination_port;
+    size_t ip_header_length;
+    int resolver_match = 0;
+
+    if (packet->tot_len < 1 ||
+        pbuf_copy_partial (packet, header, 1, 0) != 1)
+        return 0;
+
+    version = header[0] >> 4;
+    if (version == 4) {
+        uint16_t fragment;
+
+        if (packet->tot_len < 20 ||
+            pbuf_copy_partial (packet, header, 20, 0) != 20 ||
+            (header[0] & 0x0F) < 5)
+            return 0;
+        ip_header_length = (size_t)(header[0] & 0x0F) * 4;
+        if (packet->tot_len < ip_header_length + sizeof (transport) ||
+            pbuf_copy_partial (packet, header, ip_header_length, 0) !=
+                ip_header_length)
+            return 0;
+        protocol = header[9];
+        resolver_match = is_ipv4_doh_resolver (header + 16);
+        fragment = ((uint16_t)header[6] << 8) | header[7];
+        if ((fragment & 0x1FFF) != 0)
+            return resolver_match;
+    } else if (version == 6) {
+        size_t offset = 40;
+        unsigned int extensions = 0;
+
+        if (packet->tot_len < 40 ||
+            pbuf_copy_partial (packet, header, 40, 0) != 40)
+            return 0;
+        protocol = header[6];
+        while (protocol == 0 || protocol == 43 || protocol == 44 ||
+               protocol == 51 || protocol == 60) {
+            uint8_t extension[8];
+            size_t extension_length;
+
+            if (++extensions > 8 || offset + sizeof (extension) > packet->tot_len ||
+                pbuf_copy_partial (packet, extension, sizeof (extension), offset) !=
+                    sizeof (extension))
+                return 0;
+            if (protocol == 44) {
+                const uint16_t fragment =
+                    ((uint16_t)extension[2] << 8) | extension[3];
+                if ((fragment & 0xFFF8) != 0)
+                    return 0;
+                extension_length = 8;
+            } else if (protocol == 51) {
+                extension_length = ((size_t)extension[1] + 2) * 4;
+            } else {
+                extension_length = ((size_t)extension[1] + 1) * 8;
+            }
+            protocol = extension[0];
+            offset += extension_length;
+            if (offset > packet->tot_len || offset > 296)
+                return 0;
+        }
+        ip_header_length = offset;
+        if (packet->tot_len < ip_header_length + sizeof (transport))
+            return 0;
+    } else {
+        return 0;
+    }
+
+    if (protocol != 6 && protocol != 17)
+        return 0;
+    if (pbuf_copy_partial (packet, transport, sizeof (transport),
+                           ip_header_length) != sizeof (transport))
+        return 0;
+    destination_port = ((uint16_t)transport[2] << 8) | transport[3];
+    return destination_port == 853 ||
+        (destination_port == 443 && resolver_match);
 }
 
 static int
@@ -405,6 +511,14 @@ lwip_io_task_entry (void *data)
             continue;
 
         if (packet_ipv4_is_blocked (buf)) {
+            pbuf_free (buf);
+            continue;
+        }
+
+        if (packet_is_encrypted_dns (buf)) {
+#ifdef __ANDROID__
+            hev_jni_report_dns_event ("DoH/DoT Bypass Attempt", 1, 0, 0);
+#endif
             pbuf_free (buf);
             continue;
         }

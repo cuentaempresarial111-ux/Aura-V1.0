@@ -23,6 +23,6 @@ public final class TProxyService {
     public static void dispatchDnsEvent(
             String domain, int action, String sourceAddress, int sourcePort) {
         com.ciberdefensa.aura.AuraNetworkStream.INSTANCE.emitDnsEvent(
-                domain, action == 1, sourceAddress, sourcePort);
+                domain, action, sourceAddress, sourcePort);
     }
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -8,10 +9,24 @@ import 'ai_brain.dart';
 import 'radar_waves.dart';
 import 'secure_vault.dart';
 import 'network_auditor.dart';
+import 'providers/aura_state_provider.dart';
 
 enum AuraState { secure, scanning, warning, critical }
 
-void main() => runApp(const AuraApp());
+void main() {
+  final voiceEngine = AuraVoiceEngine();
+  runApp(
+    MultiProvider(
+      providers: [
+        Provider<AuraVoiceEngine>.value(value: voiceEngine),
+        ChangeNotifierProvider(
+          create: (_) => AuraStateProvider(onCriticalAlert: voiceEngine.speak),
+        ),
+      ],
+      child: const AuraApp(),
+    ),
+  );
+}
 
 class AuraApp extends StatelessWidget {
   const AuraApp({Key? key}) : super(key: key);
@@ -38,43 +53,60 @@ class AuraCoreScreen extends StatefulWidget {
 
 class _AuraCoreScreenState extends State<AuraCoreScreen>
     with SingleTickerProviderStateMixin {
+  static const MethodChannel _voiceChannel =
+      MethodChannel('com.ciberdefensa.aura/voice');
+
   late AnimationController _pulseController;
   late StreamSubscription<Map<String, dynamic>> _integritySubscription;
   late StreamSubscription<NetworkAuditEvent> _networkThreatSubscription;
   late final AuraAIBrain _aiBrain;
+  late final AuraNetworkAuditor _networkAuditor;
   final AuraSecurityEngine _securityEngine = AuraSecurityEngine();
-  final AuraVoiceEngine _voiceEngine = AuraVoiceEngine();
+  late final AuraVoiceEngine _voiceEngine;
   final AuraSecureVault _secureVault = AuraSecureVault();
-  final AuraNetworkAuditor _networkAuditor = AuraNetworkAuditor();
   final TextEditingController _inputController = TextEditingController();
 
-  String _securityStatus = "SECURE";
-  String _liveConsoleLogs = "SISTEMA AURA: Núcleo defensivo activo e íntegro.";
-  bool _shieldActive = false;
-  bool _aiProcessing = false;
   bool _agentToolActionOccurred = false;
-  bool _agentInferenceRunning = false;
-  final Set<String> _autoAnalyzedBlockedDomains = <String>{};
-  final List<NetworkAuditEvent> _pendingBlockedEvents = <NetworkAuditEvent>[];
   String? _lastRecordedIntegrityLog;
 
+  AuraStateProvider get _state => context.read<AuraStateProvider>();
+  String get _liveConsoleLogs => _state.liveConsoleLogs;
+  bool get _aiProcessing => _state.isAiProcessing;
+  bool get _voiceListening => _state.isVoiceListening;
+  bool get _shieldActive => context.read<AuraStateProvider>().isVpnActive;
+
+  String get _securityStatus {
+    final state = context.read<AuraStateProvider>();
+    if (state.isScanning) return "SCANNING";
+    return switch (state.securityLevel) {
+      AuraSecurityLevel.safe => "SECURE",
+      AuraSecurityLevel.warning => "WARNING",
+      AuraSecurityLevel.critical => "THREAT",
+    };
+  }
+
   AuraState get _auraState {
-    if (_securityStatus == "THREAT") return AuraState.critical;
-    if (_securityStatus == "SCANNING") return AuraState.scanning;
-    if (_securityStatus == "WARNING") return AuraState.warning;
-    return AuraState.secure;
+    final state = context.read<AuraStateProvider>();
+    if (state.isScanning) return AuraState.scanning;
+    return switch (state.securityLevel) {
+      AuraSecurityLevel.safe => AuraState.secure,
+      AuraSecurityLevel.warning => AuraState.warning,
+      AuraSecurityLevel.critical => AuraState.critical,
+    };
   }
 
   String get _faceState =>
-      _shieldActive || _securityStatus == "THREAT" ? "THREAT" : _securityStatus;
+      context.read<AuraStateProvider>().avatarAnimation;
 
   @override
   void initState() {
     super.initState();
+    _voiceEngine = context.read<AuraVoiceEngine>();
     _aiBrain = AuraAIBrain(
       onToolStarted: _handleAgentToolStarted,
       onToolCompleted: _handleAgentToolCompleted,
     );
+    _networkAuditor = AuraNetworkAuditor(aiBrain: _aiBrain);
     _networkThreatSubscription =
         _networkAuditor.eventStream.listen(_handleNetworkAuditEvent);
     _pulseController = AnimationController(
@@ -90,14 +122,16 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
       final logs = event["logs"] as String;
       final critical =
           level == SystemThreatLevel.critical || _agentToolActionOccurred;
-      setState(() {
-        if (!_agentToolActionOccurred) _liveConsoleLogs = logs;
-        _securityStatus = critical
-            ? "THREAT"
+      if (!_agentToolActionOccurred) {
+        _state.updatePresentation(liveConsoleLogs: logs);
+      }
+        context.read<AuraStateProvider>().setSecurityLevel(
+          critical
+            ? AuraSecurityLevel.critical
             : level == SystemThreatLevel.warning
-                ? "WARNING"
-                : "SECURE";
-      });
+              ? AuraSecurityLevel.warning
+              : AuraSecurityLevel.safe,
+          );
 
       if ((level != SystemThreatLevel.secure || _agentToolActionOccurred) &&
           logs != _lastRecordedIntegrityLog) {
@@ -126,32 +160,33 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
 
   Color _getCoreColor() {
     if (_auraState == AuraState.scanning) return const Color(0xFF06B6D4);
-    if (_auraState == AuraState.critical || _shieldActive)
+    if (_auraState == AuraState.critical)
       return const Color(0xFFEF4444);
     if (_securityStatus == "WARNING") return const Color(0xFFF59E0B);
-    return const Color(0xFF10B981);
+    return const Color(0xFF38BDF8);
   }
 
   void _triggerLocalScan() async {
     var hostileEnvironment = false;
     _agentToolActionOccurred = false;
-    setState(() {
-      _securityStatus = "SCANNING";
-      _aiProcessing = true;
-      _liveConsoleLogs =
-          "INICIANDO AUDITORÍA INTERNA: Analizando firmas criptográficas y telemetría local...";
-    });
+    context.read<AuraStateProvider>().setScanning(true);
+    _state.updatePresentation(
+      isAiProcessing: true,
+      liveConsoleLogs:
+          'INICIANDO AUDITORÍA INTERNA: Analizando firmas criptográficas y telemetría local...',
+    );
     try {
       _voiceEngine.speak("Iniciando auditoría interna del sistema.");
       final environment = await _securityEngine.checkHostileEnvironment();
       hostileEnvironment = environment['isHostile'] == true;
       if (!mounted) return;
       if (hostileEnvironment) {
-        setState(() {
-          _securityStatus = "THREAT";
-          _liveConsoleLogs =
-              'ALERTA MÁXIMA: ${environment['indicators'] ?? 'entorno hostil'}';
-        });
+        context.read<AuraStateProvider>()
+            .setSecurityLevel(AuraSecurityLevel.critical);
+        _state.updatePresentation(
+          liveConsoleLogs:
+              'ALERTA MÁXIMA: ${environment['indicators'] ?? 'entorno hostil'}',
+        );
         _voiceEngine.speak('Alerta máxima de entorno hostil detectado.');
         await _writeSecureLog(_liveConsoleLogs);
       }
@@ -173,18 +208,22 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
         'hostile_environment': environment,
       });
       if (!mounted) return;
-      setState(() {
-        if (!hostileEnvironment) {
-          _securityStatus = applications.isEmpty ? "SECURE" : "WARNING";
-        }
-        final scanSummary = applications.isEmpty
-            ? 'App Genome: no hay servicios sensibles activos.'
-            : 'App Genome: ${applications.length} apps con servicios sensibles: '
-                '$packageNames';
-        _liveConsoleLogs = hostileEnvironment
-          ? 'ALERTA MÁXIMA: $environmentIndicators. $scanSummary'
-          : scanSummary;
-      });
+      final scanSummary = applications.isEmpty
+          ? 'App Genome: no hay servicios sensibles activos.'
+          : 'App Genome: ${applications.length} apps con servicios sensibles: '
+              '$packageNames';
+      _state.updatePresentation(
+        liveConsoleLogs: hostileEnvironment
+            ? 'ALERTA MÁXIMA: $environmentIndicators. $scanSummary'
+            : scanSummary,
+      );
+          context.read<AuraStateProvider>().setSecurityLevel(
+            hostileEnvironment
+              ? AuraSecurityLevel.critical
+              : applications.isEmpty
+                ? AuraSecurityLevel.safe
+                : AuraSecurityLevel.warning,
+            );
       await _writeSecureLog('App Genome Scanner: $payload');
       final response = await _analyzeWithStoredKey(
         'Analiza este informe local de App Genome Scanner y entorno. '
@@ -193,33 +232,44 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
       );
       if (!mounted) return;
 
-      setState(() {
-        if (hostileEnvironment || _agentToolActionOccurred) {
-          _securityStatus = "THREAT";
-          _liveConsoleLogs = hostileEnvironment
-              ? 'ALERTA MÁXIMA: entorno hostil detectado. $response'
-              : 'ALERTA CRÍTICA: se ejecutó una contramedida. $response';
-        } else {
-          _securityStatus = applications.isEmpty ? "SECURE" : "WARNING";
-          _liveConsoleLogs = response;
-        }
-      });
+      _state.updatePresentation(
+        liveConsoleLogs: hostileEnvironment || _agentToolActionOccurred
+            ? 'ALERTA CRÍTICA: $response'
+            : response,
+      );
+      context.read<AuraStateProvider>().setSecurityLevel(
+            hostileEnvironment || _agentToolActionOccurred
+                ? AuraSecurityLevel.critical
+                : applications.isEmpty
+                    ? AuraSecurityLevel.safe
+                    : AuraSecurityLevel.warning,
+          );
 
       await _writeSecureLog('Escaneo: $response');
       _voiceEngine.speak(response);
     } catch (error) {
       if (!mounted) return;
-      setState(() {
-        _securityStatus = hostileEnvironment || _agentToolActionOccurred
-          ? "THREAT"
-          : "WARNING";
-        _liveConsoleLogs = hostileEnvironment || _agentToolActionOccurred
+      context.read<AuraStateProvider>().setSecurityLevel(
+            hostileEnvironment || _agentToolActionOccurred
+                ? AuraSecurityLevel.critical
+                : AuraSecurityLevel.warning,
+          );
+      _state.updatePresentation(
+        liveConsoleLogs: hostileEnvironment || _agentToolActionOccurred
           ? 'ALERTA CRÍTICA: falló una parte del escaneo local.'
-            : 'No se pudo completar la auditoría local.';
-      });
+          : 'No se pudo completar la auditoría local.',
+      );
+          context.read<AuraStateProvider>().setSecurityLevel(
+            hostileEnvironment || _agentToolActionOccurred
+                ? AuraSecurityLevel.critical
+                : AuraSecurityLevel.warning,
+              );
       await _writeSecureLog('Error de auditoría App Genome: $error');
     } finally {
-      if (mounted) setState(() => _aiProcessing = false);
+      if (mounted) {
+        context.read<AuraStateProvider>().setScanning(false);
+        _state.updatePresentation(isAiProcessing: false);
+      }
     }
   }
 
@@ -229,26 +279,109 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
 
     _inputController.clear();
     _agentToolActionOccurred = false;
-    setState(() {
-      _aiProcessing = true;
-      _liveConsoleLogs = "Aura procesando consulta analítica...";
-    });
+    _state.updatePresentation(
+      isAiProcessing: true,
+      liveConsoleLogs: 'Aura procesando consulta analítica...',
+    );
 
     try {
       final response = await _analyzeWithStoredKey(query);
       if (!mounted) return;
 
-      setState(() {
-        _liveConsoleLogs = _agentToolActionOccurred
+      _state.updatePresentation(
+        liveConsoleLogs: _agentToolActionOccurred
             ? 'ALERTA CRÍTICA: Aura ejecutó una acción defensiva. $response'
-            : response;
-      });
+        : response,
+      );
       await _writeSecureLog('Consulta: $query\nRespuesta: $response');
       _voiceEngine.speak(response);
     } finally {
-      if (mounted) setState(() => _aiProcessing = false);
+      if (mounted) _state.updatePresentation(isAiProcessing: false);
     }
   }
+
+  Future<void> _startVoiceCommand() async {
+    if (_voiceListening || _aiProcessing) return;
+    _state.updatePresentation(isVoiceListening: true);
+    try {
+      final transcript = await _voiceChannel.invokeMethod<String>(
+        'startListening',
+      );
+      if (!mounted || transcript == null || transcript.trim().isEmpty) return;
+      _inputController.text = transcript.trim();
+      _handleAIQuery();
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      context.read<AuraStateProvider>()
+          .setSecurityLevel(AuraSecurityLevel.warning);
+      _state.updatePresentation(
+        liveConsoleLogs: error.message ?? 'No se pudo reconocer la voz.',
+      );
+    } on MissingPluginException {
+      if (!mounted) return;
+      context.read<AuraStateProvider>()
+          .setSecurityLevel(AuraSecurityLevel.warning);
+      _state.updatePresentation(
+        liveConsoleLogs: 'El reconocimiento de voz no está disponible.',
+      );
+    } finally {
+      if (mounted) _state.updatePresentation(isVoiceListening: false);
+    }
+  }
+
+  Future<void> _showWhitePaper() => showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (context) => SafeArea(
+          child: FractionallySizedBox(
+            heightFactor: 0.86,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
+              child: const SelectableText(_whitePaperText),
+            ),
+          ),
+        ),
+      );
+
+  static const String _whitePaperText = '''
+AURA CYBERDEFENSE · LIBRO BLANCO OPERATIVO
+
+COMANDOS
+• “Activa todas las defensas”, “protección total” o “modo maestro”: solicita
+  activate_master_defense. Aura inicia el VPN, escanea servicios sensibles y
+  comprueba entorno e integridad en ese orden. Cada resultado es reportado; el
+  consentimiento VPN de Android sigue siendo obligatorio.
+• “Escanea aplicaciones” o “audita servicios”: consulta App Genome Scanner.
+• “Bloquea [dominio]”: puede activar mitigate_network_threat si la telemetría
+  aporta dominio y paquete. La regla afecta a todo el dispositivo, no solo a una
+  aplicación.
+• “Revisa/aisla [paquete]”: isolate_malicious_app abre los ajustes de Android.
+  Aura no fuerza detención ni desinstalación.
+• Las consultas informativas se envían a Gemini y no ejecutan herramientas salvo
+  que su contenido y la directiva defensiva las justifiquen.
+
+INSPECCIÓN DNS
+El motor C analiza consultas UDP/53 en memoria. La heurística DGA actual marca
+etiquetas de al menos 40 caracteres con 20 o más caracteres ASCII únicos y al
+menos 4 dígitos. Las coincidencias reciben 127.0.0.1 para A o ::1 para AAAA.
+Una regla explícita añade el dominio exacto a una lista global en memoria de
+hasta 256 entradas y también descarta conexiones SOCKS que reutilicen IPs
+sintéticas ya asignadas a ese dominio. No inspecciona DoH/DoT ni bloquea por UID.
+
+APP GENOME
+Solo informa servicios instalados que declaran exactamente
+BIND_ACCESSIBILITY_SERVICE o BIND_NOTIFICATION_LISTENER_SERVICE y que están
+habilitados por PackageManager y por el ajuste seguro correspondiente del
+usuario. Un permiso declarado sin activación no cuenta como servicio activo.
+
+ACCIONES Y LÍMITES
+Las acciones de herramientas pasan por Android MethodChannel y sus respuestas
+reales se devuelven a Gemini. El callback táctico eleva la UI a estado crítico
+antes de ejecutar la acción y TTS anuncia resultado confirmado o error. Android
+puede denegar micrófono, VPN, visibilidad de paquetes o resolución de UID; Aura
+lo informa y no afirma haber realizado acciones que el sistema no confirmó.
+''';
 
   void _handleAgentToolStarted(
     String toolName,
@@ -256,70 +389,29 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
   ) {
     _agentToolActionOccurred = true;
     if (mounted) {
-      setState(() {
-        _securityStatus = "THREAT";
-        _liveConsoleLogs = 'ALERTA CRÍTICA: Aura está ejecutando $toolName.';
-      });
+      context.read<AuraStateProvider>()
+          .setSecurityLevel(AuraSecurityLevel.critical);
     }
-    unawaited(_voiceEngine.announceToolExecution(toolName, arguments));
+    if (mounted) {
+      _state.updatePresentation(
+        liveConsoleLogs: 'ALERTA CRÍTICA: Aura está ejecutando $toolName.',
+      );
+    }
   }
 
   void _handleNetworkAuditEvent(NetworkAuditEvent event) {
-    if (event.action != NetworkAuditAction.blocked ||
-        _autoAnalyzedBlockedDomains.contains(event.requestedDomain)) {
-      return;
-    }
-
-    if (_autoAnalyzedBlockedDomains.length >= 128) {
-      _autoAnalyzedBlockedDomains.remove(_autoAnalyzedBlockedDomains.first);
-    }
-    _autoAnalyzedBlockedDomains.add(event.requestedDomain);
-    _agentToolActionOccurred = true;
-    if (mounted) {
-      setState(() {
-        _securityStatus = "THREAT";
-        _liveConsoleLogs =
-            'ALERTA CRÍTICA: DNS bloqueado para ${event.requestedDomain}.';
-      });
-    }
-    if (_agentInferenceRunning) {
-      if (_pendingBlockedEvents.length < 64) {
-        _pendingBlockedEvents.add(event);
-      }
-      return;
-    }
-    unawaited(_analyzeBlockedDnsEvent(event));
-  }
-
-  Future<void> _analyzeBlockedDnsEvent(NetworkAuditEvent event) async {
-    if (_agentInferenceRunning || !mounted) return;
-    _agentInferenceRunning = true;
-    try {
-      final apiKey = await _aiBrain.storedApiKey;
-      if (apiKey == null || apiKey.isEmpty) return;
-
-      final payload = jsonEncode({
-        'event_type': 'blocked_dns_threat',
-        'event': event.toJson(),
-      });
-      final response = await _aiBrain.analyzeCyberThreat(
-        'Evalúa este evento DNS bloqueado en JSON. Si la evidencia confirma '
-        'una amenaza, usa las herramientas defensivas disponibles. Respeta '
-        'el alcance global de la mitigación y no inventes un paquete. JSON: $payload',
+    if (!mounted) return;
+    context.read<AuraStateProvider>().addTelemetryEvent(event.toJson());
+    if (event.action == NetworkAuditAction.dgaAlert) {
+      _state.updatePresentation(
+        liveConsoleLogs:
+            'ALERTA DGA: ${event.requestedDomain}. Aura está analizando la amenaza.',
       );
-      if (!mounted) return;
-      setState(() {
-        _securityStatus = "THREAT";
-        _liveConsoleLogs =
-            'ALERTA CRÍTICA: ${event.requestedDomain}. $response';
-      });
-      await _writeSecureLog('Análisis agéntico DNS: $response');
-    } finally {
-      _agentInferenceRunning = false;
-      if (_pendingBlockedEvents.isNotEmpty && mounted) {
-        final nextEvent = _pendingBlockedEvents.removeAt(0);
-        unawaited(_analyzeBlockedDnsEvent(nextEvent));
-      }
+    } else if (event.action == NetworkAuditAction.blocked) {
+      _state.updatePresentation(
+        liveConsoleLogs:
+            'DNS bloqueado: ${event.requestedDomain}. Aura está analizando el evento.',
+      );
     }
   }
 
@@ -331,13 +423,16 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
     _agentToolActionOccurred = true;
     final success = result['ok'] == true;
     if (mounted) {
-      setState(() {
-        _securityStatus = "THREAT";
-        final detail = result['message'] ?? result['error'] ?? 'sin detalle';
-        _liveConsoleLogs = success
+      context.read<AuraStateProvider>()
+          .setSecurityLevel(AuraSecurityLevel.critical);
+    }
+    if (mounted) {
+      final detail = result['message'] ?? result['error'] ?? 'sin detalle';
+      _state.updatePresentation(
+        liveConsoleLogs: success
             ? 'ALERTA CRÍTICA: $detail'
-            : 'ALERTA CRÍTICA: acción no confirmada. $detail';
-      });
+            : 'ALERTA CRÍTICA: acción no confirmada. $detail',
+      );
     }
     unawaited(_writeSecureLog('Herramienta $toolName: ${jsonEncode(result)}'));
     unawaited(_voiceEngine.announceToolResult(toolName, result));
@@ -398,33 +493,42 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
 
   Future<void> _toggleNetworkShield() async {
     final requestedState = !_shieldActive;
-    setState(() {
-      _securityStatus = "SCANNING";
-      _liveConsoleLogs = requestedState
+    context.read<AuraStateProvider>().setScanning(true);
+    _state.updatePresentation(
+      liveConsoleLogs: requestedState
           ? "Solicitando autorización y arranque del escudo..."
-          : "Deteniendo el escudo...";
-    });
+          : "Deteniendo el escudo...",
+    );
 
     try {
       final active = await _aiBrain.setShieldActive(requestedState);
       if (!mounted) return;
-      setState(() {
-        if (active) _shieldActive = requestedState;
-        _securityStatus = active ? "SECURE" : "THREAT";
-        _liveConsoleLogs = !active
+      if (active) {
+        context.read<AuraStateProvider>().setVpnActive(requestedState);
+      }
+      context.read<AuraStateProvider>().setSecurityLevel(
+            active ? AuraSecurityLevel.safe : AuraSecurityLevel.critical,
+          );
+      _state.updatePresentation(
+        liveConsoleLogs: !active
             ? "No se pudo cambiar el estado del escudo."
             : requestedState
                 ? "Escudo VPN activo."
-                : "Escudo detenido.";
-      });
+                : "Escudo detenido.",
+      );
       await _writeSecureLog(_liveConsoleLogs);
     } catch (error) {
       if (!mounted) return;
-      setState(() {
-        _securityStatus = "THREAT";
-        _liveConsoleLogs = "No se pudo cambiar el estado del escudo.";
-      });
+      context.read<AuraStateProvider>()
+          .setSecurityLevel(AuraSecurityLevel.critical);
+      _state.updatePresentation(
+        liveConsoleLogs: 'No se pudo cambiar el estado del escudo.',
+      );
       await _writeSecureLog('Error de escudo: $error');
+    } finally {
+      if (mounted) {
+        context.read<AuraStateProvider>().setScanning(false);
+      }
     }
   }
 
@@ -438,154 +542,157 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
 
   @override
   Widget build(BuildContext context) {
+    final providerState = context.watch<AuraStateProvider>();
+    final statusLabel = providerState.isVoiceListening
+        ? 'ESCUCHANDO'
+      : providerState.isAiProcessing
+            ? 'ANALIZANDO'
+            : providerState.isScanning
+              ? 'ESCANEANDO'
+                : switch (providerState.securityLevel) {
+                    AuraSecurityLevel.critical => 'PROTECCIÓN CRÍTICA',
+                    AuraSecurityLevel.warning => 'REVISIÓN REQUERIDA',
+                    AuraSecurityLevel.safe => 'AURA LISTA',
+                  };
+
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       body: SafeArea(
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: Text(
-                'AURA AI • SISTEMA DE CIBERDEFENSA',
-                style: TextStyle(
-                    letterSpacing: 3,
-                    fontWeight: FontWeight.bold,
-                    color: _getCoreColor().withValues(alpha: 0.9),
-                    fontSize: 13),
+            Align(
+              alignment: Alignment.topRight,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 6, right: 12),
+                child: IconButton(
+                  tooltip: 'Libro Blanco',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.info_outline, size: 20),
+                  color: Colors.white54,
+                  onPressed: _showWhitePaper,
+                ),
               ),
             ),
             Expanded(
-              child: Center(
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    if (_auraState == AuraState.scanning ||
-                      _auraState == AuraState.critical)
-                      RepaintBoundary(
-                        child: AuraRadarWaves(
-                          animation: _pulseController,
-                          themeColor: _getCoreColor(),
-                        ),
-                      ),
-                    RepaintBoundary(
-                      child: CustomPaint(
-                        painter: RobotFacePainter(
-                          animation: _pulseController,
-                          themeColor: _getCoreColor(),
-                          state: _faceState,
-                          aiProcessing: _aiProcessing,
-                        ),
-                        size: const Size(290, 350),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final sceneSize = math.min(
+                    math.min(constraints.maxWidth * 0.9, constraints.maxHeight * 0.88),
+                    390.0,
+                  );
+                  return Center(
+                    child: SizedBox.square(
+                      dimension: sceneSize,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          RepaintBoundary(
+                            child: AuraRadarWaves(
+                              animation: _pulseController,
+                              themeColor: _getCoreColor(),
+                            ),
+                          ),
+                          RepaintBoundary(
+                            child: CustomPaint(
+                              painter: RobotFacePainter(
+                                animation: _pulseController,
+                                themeColor: _getCoreColor(),
+                                state: _faceState,
+                                aiProcessing: providerState.isAiProcessing ||
+                                  providerState.isVoiceListening,
+                              ),
+                              size: Size(sceneSize * 0.72, sceneSize * 0.88),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
+                  );
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text(
+                statusLabel,
+                style: TextStyle(
+                  color: _getCoreColor(),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0),
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
               child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
+                constraints: const BoxConstraints(minHeight: 58, maxHeight: 72),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
                 decoration: BoxDecoration(
-                  color: Colors.black45,
-                  borderRadius: BorderRadius.circular(8),
+                  color: const Color(0xFF0C1722),
+                  borderRadius: BorderRadius.circular(18),
                   border: Border.all(
-                      color: _getCoreColor().withValues(alpha: 0.15)),
-                ),
-                child: Text(
-                  _liveConsoleLogs,
-                  style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 11,
-                      color: Colors.white70),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-            // Consola de entrada de texto interactiva para hablar con Aura
-            Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _inputController,
-                      decoration: const InputDecoration(
-                        hintText: "Consulta de ciberdefensa...",
-                        hintStyle:
-                            TextStyle(fontSize: 12, color: Colors.white38),
-                        border: InputBorder.none,
-                      ),
-                      style: const TextStyle(fontSize: 13, color: Colors.white),
-                    ),
+                    color: _getCoreColor().withValues(alpha: 0.42),
                   ),
-                  IconButton(
-                    icon: Icon(Icons.send, color: _getCoreColor()),
-                    onPressed: _handleAIQuery,
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0F172A),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                      color: _getCoreColor().withValues(alpha: 0.15),
-                      width: 1.5),
                 ),
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    _buildActionButton(
-                        "ESCANEAR", _triggerLocalScan, const Color(0xFF06B6D4)),
                     IconButton(
-                      tooltip: 'Analizar eventos DNS recientes',
-                      icon: Icon(Icons.analytics_outlined,
-                          color: _getCoreColor()),
-                      onPressed: _triggerNetworkAnalysis,
+                        tooltip: providerState.isVoiceListening
+                          ? 'Escuchando'
+                          : 'Dictar comando',
+                        onPressed: providerState.isAiProcessing
+                          ? null
+                          : _startVoiceCommand,
+                      icon: Icon(
+                        providerState.isVoiceListening
+                          ? Icons.hearing
+                          : Icons.mic_none,
+                        color: providerState.isVoiceListening
+                          ? _getCoreColor()
+                          : Colors.white70,
+                      ),
                     ),
-                    _buildShieldButton(),
+                    Expanded(
+                      child: TextField(
+                        controller: _inputController,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _handleAIQuery(),
+                        decoration: const InputDecoration(
+                          hintText: 'Habla o escribe a Aura',
+                          border: InputBorder.none,
+                          isDense: true,
+                        ),
+                        style: const TextStyle(color: Colors.white, fontSize: 15),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Enviar comando',
+                        onPressed:
+                          providerState.isAiProcessing ? null : _handleAIQuery,
+                      icon: Icon(Icons.arrow_upward, color: _getCoreColor()),
+                    ),
                   ],
                 ),
               ),
-            )
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildActionButton(
-      String label, VoidCallback action, Color buttonColor) {
-    return ElevatedButton(
-      style: ElevatedButton.styleFrom(
-        backgroundColor: const Color(0xFF1E293B),
-        foregroundColor: buttonColor,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: buttonColor.withValues(alpha: 0.4)),
-        ),
-      ),
-      onPressed: _securityStatus == "SCANNING" ? null : action,
-      child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
-    );
-  }
-
   void _triggerNetworkAnalysis() async {
     if (_networkAuditor.recentEventCount == 0) {
-      setState(() => _liveConsoleLogs = 'Todavía no hay eventos DNS para analizar.');
+      _state.updatePresentation(
+        liveConsoleLogs: 'Todavía no hay eventos DNS para analizar.',
+      );
       return;
     }
 
-    setState(() {
-      _aiProcessing = true;
-      _liveConsoleLogs = 'Aura está analizando la telemetría DNS reciente...';
-    });
+    _state.updatePresentation(
+      isAiProcessing: true,
+      liveConsoleLogs: 'Aura está analizando la telemetría DNS reciente...',
+    );
     try {
       final payload = _networkAuditor.buildTelemetryPayload(limit: 100);
       final response = await _analyzeWithStoredKey(
@@ -593,11 +700,11 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
         'y advierte que source_app puede ser uid-unavailable. JSON: $payload',
       );
       if (!mounted) return;
-      setState(() => _liveConsoleLogs = response);
+      _state.updatePresentation(liveConsoleLogs: response);
       await _writeSecureLog('Análisis DNS: $response');
       _voiceEngine.speak(response);
     } finally {
-      if (mounted) setState(() => _aiProcessing = false);
+      if (mounted) _state.updatePresentation(isAiProcessing: false);
     }
   }
 
@@ -638,8 +745,10 @@ class RobotFacePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final pulseValue = animation.value;
-    final bool isScanning = state == "SCANNING";
-    final bool isThreat = state == "THREAT";
+    final bool isScanning =
+      state == "SCANNING" || state == "scanning_active";
+    final bool isThreat =
+      state == "THREAT" || state == "threat_mitigation_mode";
 
     canvas.save();
     if (aiProcessing) {

@@ -147,15 +147,21 @@ object AuraAntiTampering {
 class MainActivity: FlutterActivity() {
     private companion object {
         const val VPN_PERMISSION_REQUEST = 1081
+        const val VOICE_REQUEST = 1082
+        const val VOICE_PERMISSION_REQUEST = 1083
+        const val NOTIFICATION_PERMISSION_REQUEST = 1084
     }
 
     private val SHIELD_CHANNEL = "com.ciberdefensa.aura/shield"
     private val TELEMETRY_CHANNEL = "com.ciberdefensa.aura/telemetry"
     private val ANTI_TAMPERING_CHANNEL = "com.ciberdefensa.aura/anti_tampering"
     private val SECURITY_CHANNEL = "com.ciberdefensa.aura/security"
+    private val ENGINE_CHANNEL = "com.aura.cyberdefense/engine"
+    private val VOICE_CHANNEL = "com.ciberdefensa.aura/voice"
     private val NETWORK_STREAM_CHANNEL = "com.aura.cyberdefense/network_stream"
     private val genomeScannerExecutor = Executors.newSingleThreadExecutor()
     private var pendingShieldResult: MethodChannel.Result? = null
+        private var pendingVoiceResult: MethodChannel.Result? = null
     private var vpnReceiverRegistered = false
     private val vpnStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -175,6 +181,89 @@ class MainActivity: FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             NETWORK_STREAM_CHANNEL,
         ).setStreamHandler(AuraNetworkStream)
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            ENGINE_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "addDnsBlockRule" -> {
+                    val arguments = call.arguments as? Map<*, *>
+                    val domain = normalizeThreatDomain(arguments?.get("domain") as? String)
+                    if (domain == null) {
+                        result.success(false)
+                    } else if (!TProxyService.TProxyIsRunning()) {
+                        result.success(false)
+                    } else {
+                        try {
+                            val blocked = TProxyService.TProxyBlockDomain(domain)
+                            result.success(blocked)
+                        } catch (_: Exception) {
+                            result.success(false)
+                        }
+                    }
+                }
+
+                "openAppDetails" -> {
+                    val arguments = call.arguments as? Map<*, *>
+                    val targetPackage = arguments?.get("package_name") as? String
+                    val reason = arguments?.get("reason") as? String
+                    if (targetPackage.isNullOrBlank()) {
+                        result.success(mapOf("ok" to false, "error" to "Paquete no válido."))
+                    } else {
+                        try {
+                            packageManager.getApplicationInfo(targetPackage, 0)
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.fromParts("package", targetPackage, null),
+                                ),
+                            )
+                            result.success(
+                                mapOf(
+                                    "ok" to true,
+                                    "package_name" to targetPackage,
+                                    "reason" to reason?.take(240),
+                                    "user_action_required" to true,
+                                    "message" to "Panel de la aplicación abierto; la decisión corresponde al usuario.",
+                                ),
+                            )
+                        } catch (exception: ActivityNotFoundException) {
+                            result.success(mapOf("ok" to false, "error" to "No se pudo abrir Ajustes."))
+                        } catch (exception: Exception) {
+                            result.success(
+                                mapOf(
+                                    "ok" to false,
+                                    "error" to exception.message ?: "No se pudo abrir el panel de la app.",
+                                ),
+                            )
+                        }
+                    }
+                }
+
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            VOICE_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "startListening" -> startVoiceRecognition(result)
+                else -> result.notImplemented()
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                NOTIFICATION_PERMISSION_REQUEST,
+            )
+        }
 
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -410,13 +499,88 @@ class MainActivity: FlutterActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == VPN_PERMISSION_REQUEST) {
-            if (resultCode == RESULT_OK) {
-                startVpnService()
-            } else {
-                pendingShieldResult?.success(false)
-                pendingShieldResult = null
+        when (requestCode) {
+            VPN_PERMISSION_REQUEST -> {
+                if (resultCode == RESULT_OK) {
+                    startVpnService()
+                } else {
+                    pendingShieldResult?.success(false)
+                    pendingShieldResult = null
+                }
             }
+
+            VOICE_REQUEST -> {
+                val transcript = if (resultCode == RESULT_OK) {
+                    data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                        ?.firstOrNull()
+                } else {
+                    null
+                }
+                pendingVoiceResult?.success(transcript)
+                pendingVoiceResult = null
+            }
+        }
+    }
+
+    @Deprecated("Deprecated by Android; retained for minSdk 24 runtime permissions.")
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == VOICE_PERMISSION_REQUEST) {
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                launchVoiceRecognition()
+            } else {
+                pendingVoiceResult?.error(
+                    "MICROPHONE_PERMISSION_DENIED",
+                    "Se necesita permiso de micrófono para dictar comandos.",
+                    null,
+                )
+                pendingVoiceResult = null
+            }
+        }
+    }
+
+    private fun startVoiceRecognition(result: MethodChannel.Result) {
+        if (pendingVoiceResult != null) {
+            result.error("VOICE_BUSY", "Ya hay un reconocimiento en curso.", null)
+            return
+        }
+        pendingVoiceResult = result
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                VOICE_PERMISSION_REQUEST,
+            )
+        } else {
+            launchVoiceRecognition()
+        }
+    }
+
+    private fun launchVoiceRecognition() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-ES")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "es-ES")
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Habla con Aura")
+        }
+        try {
+            startActivityForResult(intent, VOICE_REQUEST)
+        } catch (exception: ActivityNotFoundException) {
+            pendingVoiceResult?.error(
+                "VOICE_RECOGNIZER_UNAVAILABLE",
+                "No hay un reconocedor de voz instalado.",
+                null,
+            )
+            pendingVoiceResult = null
         }
     }
 
@@ -470,6 +634,8 @@ class MainActivity: FlutterActivity() {
         }
         pendingShieldResult?.success(false)
         pendingShieldResult = null
+        pendingVoiceResult?.error("ACTIVITY_DESTROYED", "Activity cerrada.", null)
+        pendingVoiceResult = null
         super.onDestroy()
     }
 

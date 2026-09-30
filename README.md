@@ -42,9 +42,8 @@ La aplicación está diseñada para operar sin acceso root. El escudo VPN requie
 | [`radar_waves.dart`](lib/radar_waves.dart) | Dibuja ondas animadas de radar con `CustomPainter`, utilizadas durante el escaneo. |
 | [`services/aura_core.dart`](lib/services/aura_core.dart) | Servicio auxiliar que solicita telemetría Android y coordina su análisis proactivo, gestionando errores de plataforma y formato. |
 | [`services/ai_brain.dart`](lib/services/ai_brain.dart) | Adaptador que serializa evento y registros de dispositivo como JSON y delega el análisis en `AuraAIBrain`. |
-| [`secure_vault_core.dart`](lib/secure_vault_core.dart) | Implementación alternativa de persistencia basada en archivo temporal. Aplica XOR, no cifrado criptográfico, y no es la bóveda segura usada por `main.dart`; no debe emplearse para guardar secretos. |
 
-El flujo de la pantalla principal usa estado local de Flutter (`StatefulWidget` y `setState`); el proyecto no declara un gestor de estado externo como Provider, Riverpod o BLoC. Los servicios auxiliares que no se importan desde `main.dart` no forman parte del flujo principal actual.
+La pantalla principal usa `AuraStateProvider` para el estado de VPN, escaneo y telemetría; los estados efímeros de presentación permanecen locales al widget.
 
 ### Componentes nativos Android
 
@@ -97,12 +96,11 @@ El workflow `android-build` de [`codemagic.yaml`](codemagic.yaml) automatiza la 
 - El criterio DGA actual es una heurística local sobre etiquetas largas con alta diversidad de caracteres y dígitos. No equivale a inteligencia de amenazas, reputación de dominios ni una garantía de detección de malware.
 - `mitigate_network_threat` bloquea el dominio exacto para todo el dispositivo. `VpnService` no proporciona un UID fiable por paquete en el TUN actual; `app_package` identifica el contexto de la alerta, pero no limita el alcance de la regla.
 - `isolate_malicious_app` solo abre la pantalla de detalles de Android y comunica el motivo. Android no permite que Aura fuerce la detención ni la desinstalación de otra app sin privilegios especiales; el usuario decide en Ajustes.
-- Las reglas dinámicas DNS están limitadas a 256 dominios y viven en memoria del proceso nativo. La protección cubre la resolución DNS local y conexiones que reutilicen IPs mapeadas; no inspecciona ni bloquea DoH/DoT.
+- Las reglas dinámicas DNS están limitadas a 256 dominios y viven en memoria del proceso nativo. El lector del TUN descarta TCP/UDP destino 853 y tráfico destino 443 hacia 1.1.1.1, 1.0.0.1, 8.8.8.8, 8.8.4.4 y 9.9.9.9; cada descarte genera telemetría `BLOCKED`. No se descifra DoH/DoT ni se puede convertir ese flujo cifrado en una consulta DNS/53: bloquearlo puede hacer que la aplicación falle o use otro resolvedor.
 - La detección de emulador se basa en marcadores de `Build.FINGERPRINT`, `Build.MODEL` y `Build.HARDWARE`; puede producir positivos en laboratorios de QA y no es una prueba criptográfica de integridad.
 - El scanner informa componentes activos según los ajustes seguros de Android y el estado enabled del paquete/servicio. Android limita qué metadatos de otras aplicaciones son visibles y las políticas de distribución pueden restringir `QUERY_ALL_PACKAGES`.
 - `ConnectivityManager.getConnectionOwnerUid` puede no devolver un UID para el tuple observado. En ese caso el evento registra `uid-unavailable`; no se atribuye una aplicación por conjetura.
-- La protección de `flutter_secure_storage` depende de la implementación de la plataforma. La configuración actual habilita `encryptedSharedPreferences`, pero no acredita por sí sola cifrado respaldado por hardware.
-- `secure_vault_core.dart` contiene una alternativa XOR que no es adecuada para secretos. La bóveda usada por el flujo principal es `secure_vault.dart`.
+- La protección de `flutter_secure_storage` depende de la implementación de la plataforma. Android usa `encryptedSharedPreferences` y `resetOnError`; el respaldo hardware del Keystore depende del dispositivo y no puede garantizarse únicamente desde Flutter.
 
 ---
 

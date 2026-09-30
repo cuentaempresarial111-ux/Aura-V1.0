@@ -4,6 +4,8 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -33,6 +35,26 @@ class AuraVpnService : VpnService() {
         private const val NOTIFICATION_CHANNEL = "aura_vpn"
         private const val NOTIFICATION_ID = 1080
         private const val MAX_BLOCKED_IPS = 8192
+        private val dnsMetricsLock = Any()
+        @Volatile private var activeService: AuraVpnService? = null
+        private var auditedDnsRequests = 0L
+        private var blockedDnsRequests = 0L
+        private var lastDnsDomain = ""
+        private var lastDnsAction = ""
+
+        fun recordDnsAuditEvent(event: Map<String, Any>) {
+            val action = event["action"] as? String ?: return
+            val domain = event["requested_domain"] as? String ?: return
+            val service: AuraVpnService?
+            synchronized(dnsMetricsLock) {
+                auditedDnsRequests++
+                if (action == "BLOCKED" || action == "DGA_ALERT") blockedDnsRequests++
+                lastDnsDomain = domain
+                lastDnsAction = action
+                service = activeService
+            }
+            service?.scheduleNotificationUpdate()
+        }
     }
 
     private val worker = Executors.newSingleThreadExecutor()
@@ -43,9 +65,16 @@ class AuraVpnService : VpnService() {
     private val blockedIps: MutableSet<String> =
         Collections.synchronizedSet(HashSet())
     private val startRequested = AtomicBoolean(false)
+    private val notificationHandler = Handler(Looper.getMainLooper())
+    private var notificationUpdatePending = false
     private var vpnInterface: ParcelFileDescriptor? = null
     private var integrityCheckScheduled = false
     @Volatile private var tunnelStarted = false
+
+    override fun onCreate() {
+        super.onCreate()
+        activeService = this
+    }
 
     override fun onStartCommand(
         intent: android.content.Intent?,
@@ -69,7 +98,7 @@ class AuraVpnService : VpnService() {
         } else if (startRequested.compareAndSet(false, true)) {
             worker.execute { startTunnel() }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -80,6 +109,8 @@ class AuraVpnService : VpnService() {
             TProxyService.TProxyStopService()
             tunnelStarted = false
         }
+        if (activeService === this) activeService = null
+        notificationHandler.removeCallbacksAndMessages(null)
         vpnInterface?.close()
         vpnInterface = null
         super.onDestroy()
@@ -262,7 +293,31 @@ mapdns:
         )
     }
 
-    private fun createNotification(): Notification {
+    private fun scheduleNotificationUpdate() {
+        if (notificationUpdatePending) return
+        notificationUpdatePending = true
+        notificationHandler.postDelayed({
+            notificationUpdatePending = false
+            if (tunnelStarted) {
+                getSystemService(NotificationManager::class.java)
+                    .notify(NOTIFICATION_ID, createNotification(currentDnsSummary()))
+            }
+        }, 500)
+    }
+
+    private fun currentDnsSummary(): String = synchronized(dnsMetricsLock) {
+        if (auditedDnsRequests == 0L) {
+            "Túnel activo · esperando eventos DNS"
+        } else {
+            val domain = lastDnsDomain.take(52)
+            "DNS $auditedDnsRequests · bloqueados $blockedDnsRequests · " +
+                "$domain $lastDnsAction"
+        }
+    }
+
+    private fun createNotification(
+        contentText: String = "Túnel activo · esperando eventos DNS",
+    ): Notification {
         val manager = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             manager.getNotificationChannel(NOTIFICATION_CHANNEL) == null
@@ -283,7 +338,7 @@ mapdns:
         }
         return builder
             .setContentTitle("Aura Network Shield")
-            .setContentText("Conexión VPN protegida")
+            .setContentText(contentText)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setOngoing(true)
             .build()

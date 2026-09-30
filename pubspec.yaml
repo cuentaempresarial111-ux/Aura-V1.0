@@ -10,9 +10,10 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.6
-  flutter_tts: ^4.1.0
-  google_generative_ai: ^0.4.0
+  provider: ^6.1.2
+  google_generative_ai: ^0.4.7
   flutter_secure_storage: ^9.2.4
+  flutter_tts: ^4.2.5
 
 dev_dependencies:
   flutter_test:

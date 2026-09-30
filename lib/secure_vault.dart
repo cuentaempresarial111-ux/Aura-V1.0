@@ -3,16 +3,14 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AuraSecureVault {
-  static const String _entryPrefix = 'aura_threat_log_';
+  static const String _auditLogsKey = 'aura_audit_logs_v1';
   static const String _geminiApiKeyStorageKey = 'aura_gemini_api_key';
-  static const int _maxEntries = 500;
-  static int _lastEntryTimestamp = 0;
-
-  // EncryptedSharedPreferences uses Android Keystore; hardware backing is device-dependent.
+  static const int maxAuditLogs = 500;
   static const AndroidOptions _androidOptions = AndroidOptions(
     encryptedSharedPreferences: true,
-    resetOnError: false,
+    resetOnError: true,
   );
+  static Future<void> _writeQueue = Future<void>.value();
 
   final FlutterSecureStorage _storage;
 
@@ -20,7 +18,7 @@ class AuraSecureVault {
       : _storage = storage ??
             const FlutterSecureStorage(aOptions: _androidOptions);
 
-  Future<void> saveGeminiApiKey(String apiKey) async {
+  Future<void> saveApiKey(String apiKey) async {
     final normalizedApiKey = apiKey.trim();
     if (normalizedApiKey.isEmpty) {
       throw ArgumentError.value(apiKey, 'apiKey', 'La clave no puede estar vacía.');
@@ -28,68 +26,65 @@ class AuraSecureVault {
     await _storage.write(key: _geminiApiKeyStorageKey, value: normalizedApiKey);
   }
 
-  Future<String?> readGeminiApiKey() =>
-      _storage.read(key: _geminiApiKeyStorageKey);
+  Future<String?> getApiKey() => _storage.read(key: _geminiApiKeyStorageKey);
 
-  Future<void> deleteGeminiApiKey() =>
-      _storage.delete(key: _geminiApiKeyStorageKey);
+  Future<void> deleteApiKey() => _storage.delete(key: _geminiApiKeyStorageKey);
 
-  Future<void> writeLogSecurely(String logText) async {
-    await writeLogsSecurely([logText]);
+  Future<void> saveGeminiApiKey(String apiKey) => saveApiKey(apiKey);
+
+  Future<String?> readGeminiApiKey() => getApiKey();
+
+  Future<void> deleteGeminiApiKey() => deleteApiKey();
+
+  Future<void> saveAuditLogs(List<Map<String, dynamic>> newLogs) {
+    final completion = Completer<void>();
+    _writeQueue = _writeQueue.then((_) async {
+      try {
+        final history = await getAuditLogs();
+        final combined = <Map<String, dynamic>>[
+          ...history,
+          ...newLogs.map((log) => Map<String, dynamic>.from(log)),
+        ];
+        final bounded = combined.length > maxAuditLogs
+            ? combined.sublist(combined.length - maxAuditLogs)
+            : combined;
+        await _storage.write(
+          key: _auditLogsKey,
+          value: jsonEncode(bounded),
+        );
+        completion.complete();
+      } catch (error, stackTrace) {
+        completion.completeError(error, stackTrace);
+      }
+    });
+    return completion.future;
   }
 
-  Future<void> writeLogsSecurely(Iterable<String> logTexts) async {
-    var wroteAny = false;
-    for (final logText in logTexts) {
-      final currentTimestamp = DateTime.now().microsecondsSinceEpoch;
-      final entryTimestamp = currentTimestamp > _lastEntryTimestamp
-          ? currentTimestamp
-          : _lastEntryTimestamp + 1;
-      _lastEntryTimestamp = entryTimestamp;
-      final value = jsonEncode({
-        'event': logText,
-        'timestamp': DateTime.now().toUtc().toIso8601String(),
-      });
-      await _storage.write(
-        key: '$_entryPrefix$entryTimestamp',
-        value: value,
-      );
-      wroteAny = true;
+  Future<List<Map<String, dynamic>>> getAuditLogs() async {
+    final encoded = await _storage.read(key: _auditLogsKey);
+    if (encoded == null || encoded.isEmpty) return <Map<String, dynamic>>[];
+    final decoded = jsonDecode(encoded);
+    if (decoded is! List || decoded.any((entry) => entry is! Map)) {
+      throw const FormatException('El historial de auditoría almacenado no es válido.');
     }
-    if (wroteAny) await _pruneOldEntries();
+    final records = decoded
+        .map((entry) => Map<String, dynamic>.from(entry as Map))
+        .toList(growable: false);
+    return records.length > maxAuditLogs
+        ? records.sublist(records.length - maxAuditLogs)
+        : records;
   }
 
-  Future<List<Map<String, dynamic>>> readLogsSecurely() async {
-    final entries = await _storage.readAll();
-    final keys = entries.keys
-        .where((key) => key.startsWith(_entryPrefix))
-        .toList()
-      ..sort();
+  Future<void> writeLogSecurely(String logText) => writeLogsSecurely([logText]);
 
-    return [
-      for (final key in keys)
-        if (entries[key] case final String value)
-          Map<String, dynamic>.from(jsonDecode(value) as Map),
-    ];
+  Future<void> writeLogsSecurely(Iterable<String> logTexts) {
+    final now = DateTime.now().toUtc().toIso8601String();
+    return saveAuditLogs([
+      for (final text in logTexts) {'event': text, 'timestamp': now},
+    ]);
   }
 
-  Future<void> clearLogsSecurely() async {
-    final entries = await _storage.readAll();
-    for (final key
-        in entries.keys.where((key) => key.startsWith(_entryPrefix))) {
-      await _storage.delete(key: key);
-    }
-  }
+  Future<List<Map<String, dynamic>>> readLogsSecurely() => getAuditLogs();
 
-  Future<void> _pruneOldEntries() async {
-    final entries = await _storage.readAll();
-    final keys = entries.keys
-        .where((key) => key.startsWith(_entryPrefix))
-        .toList()
-      ..sort();
-    final excess = keys.length - _maxEntries;
-    for (final key in keys.take(excess > 0 ? excess : 0)) {
-      await _storage.delete(key: key);
-    }
-  }
+  Future<void> clearLogsSecurely() => _storage.delete(key: _auditLogsKey);
 }
