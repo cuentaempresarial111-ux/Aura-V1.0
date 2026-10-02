@@ -20,6 +20,10 @@ class AuraStateProvider extends ChangeNotifier {
   bool _isAiProcessing = false;
   bool _isVoiceListening = false;
   AuraSecurityLevel _securityLevel = AuraSecurityLevel.safe;
+  int _tunnelBytesProcessed = 0;
+  int _localForestEvaluations = 0;
+  int _encryptedDnsBlocks = 0;
+  String? _lastNetworkAction;
 
   AuraStateProvider({AuraCriticalAlert? onCriticalAlert})
       : _onCriticalAlert = onCriticalAlert;
@@ -30,6 +34,10 @@ class AuraStateProvider extends ChangeNotifier {
   bool get isVoiceListening => _isVoiceListening;
   String get liveConsoleLogs => _liveConsoleLogs;
   AuraSecurityLevel get securityLevel => _securityLevel;
+  int get tunnelBytesProcessed => _tunnelBytesProcessed;
+  int get localForestEvaluations => _localForestEvaluations;
+  int get encryptedDnsBlocks => _encryptedDnsBlocks;
+  String? get lastNetworkAction => _lastNetworkAction;
   String get avatarAnimation => switch (_securityLevel) {
         AuraSecurityLevel.safe => 'idle_friendly',
         AuraSecurityLevel.warning => 'scanning_active',
@@ -82,6 +90,10 @@ class AuraStateProvider extends ChangeNotifier {
 
   void addTelemetryEvent(Map<String, dynamic> event) {
     _telemetryEvents.add(Map<String, dynamic>.unmodifiable(event));
+    _lastNetworkAction = event['action'] as String?;
+    if (event['requested_domain'] == 'DoH/DoT Bypass Attempt') {
+      _encryptedDnsBlocks++;
+    }
     if (_telemetryEvents.length > maxTelemetryEvents) {
       _telemetryEvents.removeRange(
         0,
@@ -92,6 +104,17 @@ class AuraStateProvider extends ChangeNotifier {
     if (action == 'DGA_ALERT' || action == 'BLOCKED') {
       _securityLevel = AuraSecurityLevel.warning;
     }
+    notifyListeners();
+  }
+
+  void updateTunnelBytesProcessed(int bytes) {
+    if (bytes < 0 || bytes == _tunnelBytesProcessed) return;
+    _tunnelBytesProcessed = bytes;
+    notifyListeners();
+  }
+
+  void recordLocalForestEvaluation() {
+    _localForestEvaluations++;
     notifyListeners();
   }
 }

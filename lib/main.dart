@@ -1,8 +1,11 @@
-import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+
 import 'security_engine.dart';
 import 'voice_engine.dart';
 import 'ai_brain.dart';
@@ -10,6 +13,7 @@ import 'radar_waves.dart';
 import 'secure_vault.dart';
 import 'network_auditor.dart';
 import 'providers/aura_state_provider.dart';
+import 'screens/aura_core_screen.dart' as holographic_screen;
 
 enum AuraState { secure, scanning, warning, critical }
 
@@ -39,7 +43,7 @@ class AuraApp extends StatelessWidget {
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF020617),
       ),
-      home: const AuraCoreScreen(),
+      home: const holographic_screen.AuraCoreScreen(),
     );
   }
 }
@@ -59,6 +63,7 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
   late AnimationController _pulseController;
   late StreamSubscription<Map<String, dynamic>> _integritySubscription;
   late StreamSubscription<NetworkAuditEvent> _networkThreatSubscription;
+  Timer? _tunnelStatsTimer;
   late final AuraAIBrain _aiBrain;
   late final AuraNetworkAuditor _networkAuditor;
   final AuraSecurityEngine _securityEngine = AuraSecurityEngine();
@@ -114,6 +119,11 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
+    _tunnelStatsTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _refreshTunnelStats(),
+    );
+    unawaited(_refreshTunnelStats());
 
     _integritySubscription =
         _securityEngine.monitorDeviceIntegrity().listen((event) {
@@ -151,6 +161,7 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
   @override
   void dispose() {
     _pulseController.dispose();
+    _tunnelStatsTimer?.cancel();
     _integritySubscription.cancel();
     _networkThreatSubscription.cancel();
     _voiceEngine.stop();
@@ -159,11 +170,34 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
     super.dispose();
   }
 
+  Future<void> _refreshTunnelStats() async {
+    if (!mounted || !_state.isVpnActive) return;
+    try {
+      final stats = await const MethodChannel('com.aura.cyberdefense/engine')
+          .invokeMethod<List<dynamic>>('getTunnelStats');
+      if (!mounted || stats == null || stats.length < 4) return;
+      final txBytes = (stats[1] as num).toInt();
+      final rxBytes = (stats[3] as num).toInt();
+      _state.updateTunnelBytesProcessed(txBytes + rxBytes);
+    } on PlatformException {
+      // The tunnel can stop between the timer tick and the native query.
+    } on MissingPluginException {
+      // Stats are unavailable on platforms without the Android tunnel.
+    }
+  }
+
   Color _getCoreColor() {
-    if (_auraState == AuraState.scanning) return const Color(0xFF06B6D4);
-    if (_auraState == AuraState.critical)
+    final state = context.read<AuraStateProvider>();
+    if (state.isScanning) return const Color(0xFF06B6D4);
+    if (state.securityLevel == AuraSecurityLevel.critical) {
       return const Color(0xFFEF4444);
-    if (_securityStatus == "WARNING") return const Color(0xFFF59E0B);
+    }
+    if (state.securityLevel == AuraSecurityLevel.warning) {
+      return const Color(0xFFF59E0B);
+    }
+    if (state.lastNetworkAction == 'ALLOWED') {
+      return const Color(0xFF70E1BB);
+    }
     return const Color(0xFF38BDF8);
   }
 
@@ -455,14 +489,17 @@ lo informa y no afirma haber realizado acciones que el sistema no confirmó.
     try {
       final active = await _aiBrain.setShieldActive(requestedState);
       if (!mounted) return;
-      if (active) {
+      final operationSucceeded = active == requestedState;
+      if (operationSucceeded) {
         context.read<AuraStateProvider>().setVpnActive(requestedState);
       }
       context.read<AuraStateProvider>().setSecurityLevel(
-            active ? AuraSecurityLevel.safe : AuraSecurityLevel.critical,
+            operationSucceeded
+                ? AuraSecurityLevel.safe
+                : AuraSecurityLevel.critical,
           );
       _state.updatePresentation(
-        liveConsoleLogs: !active
+        liveConsoleLogs: !operationSucceeded
             ? "No se pudo cambiar el estado del escudo."
             : requestedState
                 ? "Escudo VPN activo."
@@ -542,6 +579,16 @@ lo informa y no afirma haber realizado acciones que el sistema no confirmó.
                             child: AuraRadarWaves(
                               animation: _pulseController,
                               themeColor: _getCoreColor(),
+                            ),
+                          ),
+                          Positioned(
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            child: holographic_screen.AuraHolographicHud(
+                              state: providerState,
+                              tunnelActive: providerState.isVpnActive,
+                              accentColor: _getCoreColor(),
                             ),
                           ),
                           RepaintBoundary(

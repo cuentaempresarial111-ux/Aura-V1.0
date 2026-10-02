@@ -158,6 +158,7 @@ class AuraAIBrain {
             .fold<int>(0, (sum, prediction) => sum + prediction);
         final threatScore = threatVotes / trees.length;
         final isThreat = threatScore >= 0.5;
+        _stateProvider?.recordLocalForestEvaluation();
 
         if (isThreat) {
           _stateProvider?.setSecurityLevel(AuraSecurityLevel.critical);
