@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
 
+import 'agent/aura_whitelist.dart';
 import 'providers/aura_state_provider.dart';
 
 typedef AuraToolStartedCallback = void Function(
@@ -141,9 +142,16 @@ class AuraAIBrain {
     }
 
     try {
-      final model = await (_modelLoad ??= _loadModel());
       final results = <String>[];
       for (final domain in domains) {
+        if (AuraWhitelist.isSafe(domain)) {
+          results.add(
+            'Dominio seguro por allowlist: $domain (0% de votos de amenaza).',
+          );
+          continue;
+        }
+
+        final model = await (_modelLoad ??= _loadModel());
         final features = extractFeatures(domain);
         final trees = model['trees'];
         if (trees is! List || trees.isEmpty) {
