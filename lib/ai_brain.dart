@@ -140,6 +140,10 @@ class AuraAIBrain {
   Future<String> analyzeCyberThreat(String userInput) =>
       analyzeThreatPayload(userInput);
 
+  Future<void> preloadModel() async {
+    await (_modelLoad ??= _loadModel());
+  }
+
   Future<String> analyzeThreatPayload(String payload) async {
     final domains = _extractDomains(payload);
     if (domains.isEmpty) {

@@ -14,6 +14,7 @@ import 'secure_vault.dart';
 import 'network_auditor.dart';
 import 'providers/aura_state_provider.dart';
 import 'screens/aura_core_screen.dart' as holographic_screen;
+import 'screens/splash_screen.dart';
 
 enum AuraState { secure, scanning, warning, critical }
 
@@ -43,7 +44,7 @@ class AuraApp extends StatelessWidget {
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF020617),
       ),
-      home: const holographic_screen.AuraCoreScreen(),
+      home: const SplashScreen(),
     );
   }
 }
