@@ -34,7 +34,7 @@ class AuraApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Aura Cyberdefense',
+      title: 'Aura Mobile Defens',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF020617),
@@ -346,7 +346,7 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
       );
 
   static const String _whitePaperText = '''
-AURA CYBERDEFENSE · LIBRO BLANCO OPERATIVO
+AURA MOBILE DEFENS · LIBRO BLANCO OPERATIVO
 
 COMANDOS
 • “Activa todas las defensas”, “protección total” o “modo maestro”: solicita

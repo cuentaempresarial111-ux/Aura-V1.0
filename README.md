@@ -1,6 +1,6 @@
-# Aura Cyberdefense V1.0: Descripción oficial de la solución agéntica inteligente para Android sin privilegios root
+# Aura Mobile Defens: Descripción oficial del ecosistema propietario de defensa cibernética para Android
 
-Aura Cyberdefense es una aplicación de ciberdefensa para Android, construida con Flutter, Dart y un motor de túnel nativo C. Opera sin privilegios root mediante `VpnService`; Android requiere autorización explícita del usuario para iniciar el túnel. La aplicación combina auditoría DNS local, telemetría de red, clasificación léxica local y controles defensivos nativos con una interfaz accesible por voz.
+Aura Mobile Defens es una plataforma de defensa cibernética para Android, construida con Flutter, Dart y un motor de túnel nativo C. Opera sin privilegios root mediante `VpnService`; Android requiere autorización explícita del usuario para iniciar el túnel. La aplicación combina auditoría DNS local, telemetría de red, clasificación léxica local y controles defensivos nativos con una interfaz accesible por voz.
 
 La clasificación local carga un bosque heurístico desde `assets/model/aura_brain_model.json`. No usa red ni credenciales, no es un modelo entrenado con un conjunto de datos y no sustituye un servicio de reputación ni la revisión humana.
 
