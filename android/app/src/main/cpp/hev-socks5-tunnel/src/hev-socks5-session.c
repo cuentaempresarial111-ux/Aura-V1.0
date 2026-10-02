@@ -13,6 +13,9 @@
 #include "hev-logger.h"
 #include "hev-config.h"
 #include "hev-socks5-client.h"
+#ifdef __ANDROID__
+#include "hev-jni.h"
+#endif
 
 #include "hev-socks5-session.h"
 
@@ -98,6 +101,11 @@ hev_socks5_session_bind (HevSocks5 *self, int fd, const struct sockaddr *dest)
         if (res < 0)
             return -1;
     }
+    #ifdef __ANDROID__
+        if (!hev_jni_protect_socket (fd))
+            return -1;
+    #endif
+
 
     set_sock_tcp_fastopen (fd, srv->fastopen);
 

@@ -187,6 +187,18 @@ class MainActivity: FlutterActivity() {
             ENGINE_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
+                "getTunnelStats" -> {
+                    if (!TProxyService.TProxyIsRunning()) {
+                        result.success(longArrayOf(0, 0, 0, 0))
+                    } else {
+                        try {
+                            result.success(TProxyService.TProxyGetStats())
+                        } catch (_: Exception) {
+                            result.error("TUN_STATS", "No se pudieron leer las métricas TUN.", null)
+                        }
+                    }
+                }
+
                 "addDnsBlockRule" -> {
                     val arguments = call.arguments as? Map<*, *>
                     val domain = normalizeThreatDomain(arguments?.get("domain") as? String)

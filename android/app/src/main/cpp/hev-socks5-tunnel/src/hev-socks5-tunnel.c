@@ -65,10 +65,10 @@ static int tun_fd_local;
 static int session_count;
 static int event_fds[2] = { -1, -1 };
 
-static size_t stat_tx_packets;
-static size_t stat_rx_packets;
-static size_t stat_tx_bytes;
-static size_t stat_rx_bytes;
+static atomic_size_t stat_tx_packets;
+static atomic_size_t stat_rx_packets;
+static atomic_size_t stat_tx_bytes;
+static atomic_size_t stat_rx_bytes;
 
 static struct netif *netif;
 
@@ -271,8 +271,8 @@ netif_output_handler (struct netif *netif, struct pbuf *p)
         return ERR_IF;
     }
 
-    stat_rx_packets++;
-    stat_rx_bytes += s;
+    atomic_fetch_add_explicit (&stat_rx_packets, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit (&stat_rx_bytes, (size_t)s, memory_order_relaxed);
 
     return ERR_OK;
 }
@@ -523,8 +523,8 @@ lwip_io_task_entry (void *data)
             continue;
         }
 
-        stat_tx_packets++;
-        stat_tx_bytes += buf->tot_len;
+        atomic_fetch_add_explicit (&stat_tx_packets, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit (&stat_tx_bytes, buf->tot_len, memory_order_relaxed);
 
         hev_task_mutex_lock (&mutex);
         if (netif->input (buf, netif) != ERR_OK)
@@ -913,10 +913,10 @@ retry:
     gateway_fini ();
     tunnel_fini ();
 
-    stat_tx_packets = 0;
-    stat_rx_packets = 0;
-    stat_tx_bytes = 0;
-    stat_rx_bytes = 0;
+    atomic_store_explicit (&stat_tx_packets, 0, memory_order_relaxed);
+    atomic_store_explicit (&stat_rx_packets, 0, memory_order_relaxed);
+    atomic_store_explicit (&stat_tx_bytes, 0, memory_order_relaxed);
+    atomic_store_explicit (&stat_rx_bytes, 0, memory_order_relaxed);
 }
 
 int
@@ -976,14 +976,14 @@ hev_socks5_tunnel_stats (size_t *tx_packets, size_t *tx_bytes,
     LOG_D ("socks5 tunnel stats");
 
     if (tx_packets)
-        *tx_packets = stat_tx_packets;
+        *tx_packets = atomic_load_explicit (&stat_tx_packets, memory_order_relaxed);
 
     if (tx_bytes)
-        *tx_bytes = stat_tx_bytes;
+        *tx_bytes = atomic_load_explicit (&stat_tx_bytes, memory_order_relaxed);
 
     if (rx_packets)
-        *rx_packets = stat_rx_packets;
+        *rx_packets = atomic_load_explicit (&stat_rx_packets, memory_order_relaxed);
 
     if (rx_bytes)
-        *rx_bytes = stat_rx_bytes;
+        *rx_bytes = atomic_load_explicit (&stat_rx_bytes, memory_order_relaxed);
 }

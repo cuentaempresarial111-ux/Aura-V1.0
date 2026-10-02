@@ -50,6 +50,7 @@ static int thread_joinable;
 static JavaVM *java_vm;
 static jclass tproxy_class;
 static jmethodID dns_event_method;
+static jmethodID protect_socket_method;
 static pthread_t work_thread;
 static pthread_mutex_t mutex;
 static pthread_key_t current_jni_env;
@@ -100,16 +101,50 @@ JNI_OnLoad (JavaVM *vm, void *reserved)
     dns_event_method = (*env)->GetStaticMethodID (
         env, klass, "dispatchDnsEvent",
         "(Ljava/lang/String;ILjava/lang/String;I)V");
+    protect_socket_method = (*env)->GetStaticMethodID (
+        env, klass, "protectSocket", "(I)Z");
     res = (*env)->RegisterNatives (env, klass, native_methods,
                                    N_ELEMENTS (native_methods));
     (*env)->DeleteLocalRef (env, klass);
-    if (res < 0 || !tproxy_class || !dns_event_method)
+    if (res < 0 || !tproxy_class || !dns_event_method || !protect_socket_method)
         return JNI_ERR;
 
     pthread_key_create (&current_jni_env, detach_current_thread);
     pthread_mutex_init (&mutex, NULL);
 
     return JNI_VERSION_1_4;
+}
+
+int
+hev_jni_protect_socket (int socket_fd)
+{
+    JNIEnv *env = NULL;
+    int attached = 0;
+    jint status;
+    jboolean protected;
+
+    if (!java_vm || !tproxy_class || !protect_socket_method)
+        return 0;
+
+    status = (*java_vm)->GetEnv (java_vm, (void **)&env, JNI_VERSION_1_4);
+    if (status == JNI_EDETACHED) {
+        if ((*java_vm)->AttachCurrentThread (java_vm, (void **)&env, NULL) != JNI_OK)
+            return 0;
+        attached = 1;
+    } else if (status != JNI_OK) {
+        return 0;
+    }
+
+    protected = (*env)->CallStaticBooleanMethod (
+        env, tproxy_class, protect_socket_method, (jint)socket_fd);
+    if ((*env)->ExceptionCheck (env)) {
+        (*env)->ExceptionClear (env);
+        protected = JNI_FALSE;
+    }
+    if (attached)
+        (*java_vm)->DetachCurrentThread (java_vm);
+
+    return protected == JNI_TRUE;
 }
 
 void

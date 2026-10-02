@@ -41,6 +41,9 @@ class AuraVpnService : VpnService() {
         private var blockedDnsRequests = 0L
         private var lastDnsDomain = ""
         private var lastDnsAction = ""
+        @JvmStatic
+        fun protectSocket(socketFd: Int): Boolean =
+            activeService?.protect(socketFd) ?: false
 
         fun recordDnsAuditEvent(event: Map<String, Any>) {
             val action = event["action"] as? String ?: return
@@ -143,14 +146,13 @@ class AuraVpnService : VpnService() {
             replaceBlockedIps(downloadThreatFeed())
 
             val builder = Builder()
-                .setSession("AuraCyberdefenseShield")
+                .setSession("Aura Mobile Defens")
                 .setMtu(1500)
                 .addAddress("10.0.0.2", 24)
                 .addAddress("fd00::2", 64)
                 .addRoute("0.0.0.0", 0)
                 .addRoute("::", 0)
                 .addDnsServer("10.0.0.3")
-                .addDisallowedApplication(packageName)
 
             established = builder.establish()
                 ?: throw IOException("Android no estableció la interfaz VPN.")

@@ -20,6 +20,10 @@ public final class TProxyService {
 
     public static native boolean TProxyBlockDomain(String domain);
 
+    public static boolean protectSocket(int socketFd) {
+        return com.ciberdefensa.aura.AuraVpnService.protectSocket(socketFd);
+    }
+
     public static void dispatchDnsEvent(
             String domain, int action, String sourceAddress, int sourcePort) {
         com.ciberdefensa.aura.AuraNetworkStream.INSTANCE.emitDnsEvent(
