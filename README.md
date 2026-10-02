@@ -1,85 +1,39 @@
-# Aura Mobile Defens: Descripción oficial del ecosistema propietario de defensa cibernética para Android
+# Aura Mobile Defens (V1.0)
 
-Aura Mobile Defens es una plataforma de defensa cibernética para Android, construida con Flutter, Dart y un motor de túnel nativo C. Opera sin privilegios root mediante `VpnService`; Android requiere autorización explícita del usuario para iniciar el túnel. La aplicación combina auditoría DNS local, telemetría de red, clasificación léxica local y controles defensivos nativos con una interfaz accesible por voz.
+Aura Mobile Defens es una aplicación Android de ciberdefensa con una arquitectura Flutter/Dart y componentes nativos Kotlin, JNI y C. Puede operar sin privilegios root mediante `VpnService`; Android exige autorización explícita para crear el túnel. Cuando el usuario lo activa, las rutas por defecto IPv4 e IPv6 se dirigen a la interfaz TUN y el motor `hev-socks5-tunnel` procesa el tráfico.
 
-La clasificación local carga un bosque heurístico desde `assets/model/aura_brain_model.json`. No usa red ni credenciales, no es un modelo entrenado con un conjunto de datos y no sustituye un servicio de reputación ni la revisión humana.
+El proyecto ofrece inspección DNS local, reglas de bloqueo, una clasificación heurística de dominios y una consola interactiva con acceso a acciones nativas existentes. No es una solución certificada para uso militar ni una garantía de protección integral. La cobertura depende de Android, de la configuración del usuario, de la conectividad y de los límites descritos en este documento.
 
-## Arquitectura de Ciberdefensa Avanzada
+## Arquitectura de Inferencia Local Soberana
 
-### Flujo de telemetría y análisis
+La clasificación de dominios no requiere ni invoca la API de Google Gemini. `AuraAIBrain.analyzeThreatPayload` extrae dominios de eventos JSON; si recibe texto que no sea JSON, utiliza una expresión regular para buscar hosts. Antes de evaluar el modelo consulta `AuraWhitelist.isSafe`. Los dominios incluidos se devuelven con cero votos de amenaza y no cargan ni recorren el bosque.
 
-El camino de eventos y contramedidas está conectado de extremo a extremo:
+El modelo, `assets/model/aura_brain_model.json`, declara 20 árboles heurísticos con hojas binarias `safe` y `threat`. No es un bosque entrenado y validado sobre un conjunto de datos de referencia. Para cada dominio no permitido por la lista blanca, el motor calcula seis características: longitud del host, entropía de Shannon, proporción de dígitos, proporción de vocales, proporción de secuencias consonánticas y presencia de un TLD marcado como sospechoso. Cada árbol evalúa divisiones sobre estas características; el resultado se obtiene por mayoría simple con umbral de 0,5. El porcentaje de votos mostrado es una puntuación heurística, no una probabilidad calibrada.
 
-1. **TUN y motor C:** Android entrega el descriptor TUN a `hev-socks5-tunnel`. Su loop de lectura examina paquetes antes de entregarlos a lwIP. `hev-mapped-dns` procesa las consultas UDP/53, reconoce dominios incluidos en la lista de bloqueo y aplica una heurística DGA local.
-2. **C y JNI:** el motor informa el dominio, la acción y el origen mediante `hev_jni_report_dns_event`. JNI adjunta el hilo nativo a la JVM cuando es necesario y llama a `TProxyService.dispatchDnsEvent`.
-3. **Kotlin y EventChannel:** `AuraNetworkStream` conserva el código de acción (`ALLOWED`, `BLOCKED` o `DGA_ALERT`), resuelve la aplicación de origen fuera del hilo del túnel cuando Android lo permite y publica el mapa de evento en `com.aura.cyberdefense/network_stream`.
-4. **Auditor Dart:** `AuraNetworkAuditor` valida el evento, lo incorpora a su búfer acotado, persiste registros por lotes y, ante `BLOCKED` o `DGA_ALERT`, envía inmediatamente el JSON del evento a `AuraAIBrain.analyzeThreatPayload`.
-5. **Bosque léxico local:** `AuraAIBrain` carga el JSON con `rootBundle`, calcula longitud, entropía de Shannon, ratios de dígitos y vocales, secuencias consonánticas y TLD sospechosos; recorre los 20 árboles y promedia sus votos. El resultado es una heurística, no una probabilidad calibrada ni una garantía de detección.
-6. **Contramedida Kotlin/C:** cuando el voto mayoritario clasifica un dominio como amenaza, el callback del auditor invoca `addDnsBlockRule` por `MethodChannel`. `MainActivity` valida el dominio y llama a `TProxyService.TProxyBlockDomain`; JNI llega a la lista compartida de `hev-mapped-dns`, protegida por mutex. El resultado booleano vuelve a Dart y la regla, si se confirma, es global para el dispositivo.
+No hay un benchmark reproducible en el repositorio que demuestre inferencia inferior a 5 ms. La duración depende del dispositivo, del estado de la aplicación y de si el modelo ya está cargado. Los eventos `BLOCKED` y `DGA_ALERT` del auditor DNS activan análisis local; otros flujos de consulta pueden invocarlo a través de `AuraAIBrain`.
 
-### Canales de plataforma
+## Blindaje Criptográfico Anti-Ingeniería Inversa (Militar-Grade)
 
-| Canal | Dirección y responsabilidad |
-|---|---|
-| `com.aura.cyberdefense/network_stream` | Kotlin publica eventos de auditoría mediante `EventChannel`. |
-| `com.aura.cyberdefense/engine` | Dart solicita `addDnsBlockRule` u `openAppDetails`; Kotlin responde con el resultado de la operación. |
-| `com.ciberdefensa.aura/shield` | Dart solicita el inicio/parada del servicio VPN y Android gestiona el consentimiento del sistema. |
-| `com.ciberdefensa.aura/telemetry` | Dart solicita inventario de permisos de riesgo al código Android. |
+El encabezado describe un objetivo, no una certificación ni una afirmación de resistencia militar. `tool/encrypt_model.dart` lee el JSON fuente, valida que contenga un bosque, cifra el texto con AES-256-CBC y padding PKCS7, y escribe `assets/model/aura_brain_model.enc`. El formato del archivo es hexadecimal: los primeros 16 bytes representan el IV aleatorio y los bytes restantes contienen el ciphertext. La clave AES de 32 bytes se deriva mediante HKDF-SHA256, con HMAC-SHA256 y valores de salt e info versionados en `AuraCryptoLayer`.
 
-## Gestión de Estado Reactivo y Avatar Emocional
+El bundle de Flutter declara el archivo `.enc`, no el JSON plano. El JSON fuente, sin embargo, continúa versionado en el repositorio; el script no lo destruye. Al necesitar un modelo, el cargador lee el texto cifrado desde `rootBundle`, obtiene la clave con `AuraSecureVault.getOrCreateModelMasterKey`, descifra el contenido y valida en memoria que sea JSON con exactamente 20 árboles. El resultado parseado permanece en memoria y se conserva mediante la carga diferida de `AuraAIBrain` mientras esa instancia reutilice el futuro del modelo.
 
-`AuraStateProvider`, basado en `ChangeNotifier` y `provider` (`^6.1.2`), es la fuente de estado compartido de la aplicación. Expone el nivel de seguridad, el estado VPN, el escaneo, la actividad de consulta/voz, los registros de presentación y hasta 500 eventos de telemetría. La interfaz consume los cambios con `context.watch<AuraStateProvider>()`; `main.dart` no utiliza `setState`.
+La clave inicial `defaultModelMasterKey` es una constante compartida incluida en el código fuente y, por tanto, recuperable del APK. `flutter_secure_storage` configura `encryptedSharedPreferences` y guarda esa clave durante la primera carga del modelo, pero este almacenamiento no transforma una clave conocida por la aplicación en una clave aleatoria, exclusiva del hardware o distinta por instalación. HKDF deriva bytes a partir de la clave proporcionada; no es una operación de Keystore ni una certificación hardware. AES-CBC tampoco autentica el ciphertext; el padding y la validación JSON/estructura reducen errores accidentales, pero no sustituyen un MAC o un modo AEAD. Este mecanismo dificulta la lectura casual del asset empaquetado, pero no impide ingeniería inversa ni extracción de la clave.
 
-| Nivel | Estado visual del avatar | Comportamiento |
-|---|---|---|
-| `safe` | `idle_friendly`, azul | Estado normal. |
-| `warning` | `scanning_active`, naranja | Evento DNS `BLOCKED` o detección `DGA_ALERT` pendiente de evaluación. |
-| `critical` | `threat_mitigation_mode`, rojo | El clasificador local determina una amenaza o el motor confirma una condición crítica. El provider notifica a la UI y solicita una alerta hablada en español mediante `flutter_tts`. |
+## Escudo Anti-Falsos Positivos (Allowlist)
 
-El provider notifica a sus oyentes al cambiar el estado y mantiene un máximo de 500 eventos en memoria. El `CustomPainter` usa el estado emocional para representar alerta y escaneo en el avatar.
+`AuraWhitelist.isSafe` normaliza el texto y extrae el host con `Uri`. La comparación acepta el dominio raíz o un subdominio delimitado por punto, por ejemplo `api.google.com`, y no considera seguro un host engañoso como `google.com.attacker.invalid`. La lista contiene exactamente estos 20 sufijos: `google.com`, `apple.com`, `microsoft.com`, `amazonaws.com`, `cloudflare.com`, `akamaiedge.net`, `android.com`, `github.com`, `whatsapp.net`, `googleapis.com`, `gstatic.com`, `googleusercontent.com`, `apple-dns.net`, `icloud.com`, `microsoftonline.com`, `windows.net`, `amazon.com`, `awsstatic.com`, `akamaized.net` y `fastly.net`.
 
-## Mitigación de Red de Élite (Zero Point Blind)
+La consulta ocurre antes de cargar el modelo y antes de calcular características o votos. Es una excepción de clasificación para infraestructura conocida, no una prueba de que cada subdominio, contenido o servicio sea benigno. Un dominio permitido comprometido seguirá excluido del bosque hasta que la lista se actualice.
 
-El motor C descarta en el loop propietario del descriptor TUN los paquetes TCP/UDP con destino al puerto 853 (DoT). También descarta tráfico TCP/UDP al puerto 443 dirigido a estos resolvedores IPv4 conocidos: Cloudflare `1.1.1.1` y `1.0.0.1`, Google `8.8.8.8` y `8.8.4.4`, y Quad9 `9.9.9.9`. Los descartes DoH/DoT se notifican como `BLOCKED` con el dominio descriptivo `DoH/DoT Bypass Attempt`.
+## Consola Agéntica con Feedback Continuo (Zero-UI)
 
-Este control **bloquea** esos flujos; no descifra ni convierte una conexión DoH/DoT en una consulta UDP/53. Un downgrade transparente no es posible sin terminar el protocolo cifrado y cambiar el comportamiento de la aplicación cliente. Una app puede fallar o recurrir a otro resolvedor. La regla DoH se limita a las direcciones IPv4 enumeradas; no constituye bloqueo universal de todos los proveedores DoH, direcciones IPv6, DoQ ni resolvedores personalizados.
+La interfaz de `lib/screens/aura_core_screen.dart` presenta un avatar dibujado con `CustomPainter` en la región superior y una consola táctica en la inferior. `AuraTokens` define los colores, espaciados y radios usados por la pantalla. El estado de `AuraStateProvider` cambia el color y el resplandor del avatar entre los niveles seguro, advertencia y crítico. La consola consume `AgentController.instance.events` con `StreamBuilder<AgentEvent>` y representa pensamiento, acción, éxito, advertencia o error en un `ListView.builder`; conserva hasta 500 eventos en el historial en memoria.
 
-La bóveda anterior basada en XOR y archivos temporales fue eliminada. `AuraSecureVault` usa exclusivamente `flutter_secure_storage` (`^9.2.4`), activa `encryptedSharedPreferences` y `resetOnError` en Android, y mantiene el historial como JSON limitado a 500 registros. El cifrado usa los mecanismos disponibles en el dispositivo; el respaldo hardware del Keystore no puede garantizarse desde la aplicación para todos los modelos.
+El texto escrito y la transcripción obtenida mediante `com.ciberdefensa.aura/voice` se envían a `AgentController.run`. `AuraIntentParser` reconoce localmente órdenes de bloqueo, aislamiento o consulta de estado. `AuraTools` despacha `block_domain` por `com.aura.cyberdefense/engine` al método nativo `addDnsBlockRule`. La acción `isolate_app` invoca `openAppDetails`, que abre la pantalla de información de la aplicación en Ajustes; Android requiere que la persona confirme allí cualquier cambio. No fuerza la detención ni la desinstalación de paquetes. La consola es una interfaz visible e interactiva: “Zero-UI” no significa operación sin interfaz ni autonomía para eludir el consentimiento de Android.
 
-La heurística DGA analiza nombres observados en DNS local. Es un indicador estructural, no un servicio de reputación, una prueba de malware ni una garantía de detección. La atribución de UID depende de las API y permisos disponibles; puede registrarse como `uid-unavailable`.
+El flujo DNS también pasa por el motor C del túnel. `hev-mapped-dns` inspecciona consultas DNS que procesa localmente y publica eventos mediante JNI y `com.aura.cyberdefense/network_stream`. El filtro de tráfico cifrado descarta paquetes TCP/UDP al puerto 853 y tráfico al puerto 443 dirigido a un conjunto limitado de resolvedores IPv4; no cubre universalmente DoH, IPv6, DoQ ni resolvedores personalizados. La creación del túnel y el consentimiento siguen sujetos a Android y a las decisiones del usuario.
 
-## Dependencias principales
+## Licencia de Software Propietario
 
-Las restricciones directas declaradas en `pubspec.yaml` son:
-
-| Paquete | Restricción | Función |
-|---|---:|---|
-| `provider` | `^6.1.2` | Estado reactivo de VPN, telemetría, presentación y avatar. |
-| `flutter_secure_storage` | `^9.2.4` | Almacenamiento local cifrado de registros de auditoría. |
-| `flutter_tts` | `^4.2.5` | Alertas y respuestas habladas en español. |
-| JSON de assets | local | Bosque de reglas heurísticas; no requiere dependencia de inferencia adicional. |
-
-El proyecto requiere Dart `>=3.0.0 <4.0.0` y usa Flutter del SDK. `pubspec.lock` determina las versiones resueltas; después de eliminarlo, `flutter pub get` volverá a resolver las restricciones y generará un lockfile nuevo.
-
-## Pipelines de Integración Continua
-
-El workflow `android-build` de [`codemagic.yaml`](codemagic.yaml) está configurado para Flutter `3.47.5`, Java `21` y Android release. Para cada `push` en `main` o `principal`, configura `android/local.properties`, ejecuta `flutter clean`, `flutter pub get` y `flutter build apk --release`.
-
-La integración C se construye directamente con el NDK de Flutter mediante `android/app/build.gradle`, `Android.mk` y la tarea Gradle `buildHevSocks5Tunnel`, dependiente de `preBuild`. No requiere un paso manual separado en Codemagic. El flujo publica los APK de `build/app/outputs/flutter-apk/`.
-
-### Saneamiento local de dependencias
-
-El siguiente comando limpia los artefactos Flutter del proyecto, elimina la caché global de paquetes Pub indicada por `PUB_CACHE` (o `~/.pub-cache`), borra el lockfile local, vuelve a descargar y resolver dependencias y analiza el proyecto. Es destructivo para la caché de paquetes compartida, pero no elimina el SDK Flutter:
-
-```bash
-pub_cache="${PUB_CACHE:-$HOME/.pub-cache}" && [[ -n "$pub_cache" && "$pub_cache" != "/" && "$pub_cache" != "$HOME" ]] && flutter clean && rm -rf -- "$pub_cache" && rm -f pubspec.lock && flutter pub get && flutter analyze
-```
-
-## Compilación local
-
-```bash
-flutter pub get
-flutter build apk --release
-```
-
-El APK se genera en `build/app/outputs/flutter-apk/`.
+El archivo [`LICENSE`](LICENSE) contiene el contrato propietario de Aura Mobile Defens y declara: **“Todos los derechos reservados.”** Su permiso se limita a visualización, revisión del código y auditoría de seguridad en este repositorio. Prohíbe modificar o crear obras derivadas, distribuir, redistribuir, vender, sublicenciar, alquilar, clonar o renombrar el software sin autorización expresa y por escrito del titular. Este resumen no amplía la licencia; prevalece el texto íntegro de `LICENSE`.
