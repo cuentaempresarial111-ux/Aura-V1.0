@@ -20,6 +20,39 @@ abstract class AuraCryptoLayer {
   static const String _derivationSalt = 'Aura Mobile Defens model key v1';
   static const String _derivationInfo = 'aura-model-aes-256-cbc-pkcs7';
 
+  static String encryptModel(
+    String plaintext,
+    String secureKey, {
+    IV? iv,
+  }) {
+    try {
+      if (secureKey.isEmpty) {
+        throw const AuraCryptoException('La clave segura está vacía.');
+      }
+      if (jsonDecode(plaintext) is! Map) {
+        throw const AuraCryptoException(
+          'El plaintext no es un objeto JSON de modelo.',
+        );
+      }
+
+      final initializationVector = iv ?? IV.fromSecureRandom(_ivLength);
+      if (initializationVector.bytes.length != _ivLength) {
+        throw const AuraCryptoException('El vector IV AES debe tener 16 bytes.');
+      }
+      final ciphertext = Encrypter(
+        AES(Key(_deriveKey(secureKey)), mode: AESMode.cbc, padding: 'PKCS7'),
+      ).encrypt(plaintext, iv: initializationVector);
+      return <int>[
+        ...initializationVector.bytes,
+        ...ciphertext.bytes,
+      ].map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+    } on AuraCryptoException {
+      rethrow;
+    } on Object catch (error) {
+      throw AuraCryptoException('No se pudo cifrar el modelo.', error);
+    }
+  }
+
   static String decryptModel(String encryptedHex, String secureKey) {
     try {
       if (secureKey.isEmpty) {

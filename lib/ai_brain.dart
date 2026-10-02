@@ -3,7 +3,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
 
+import 'agent/aura_crypto_layer.dart';
 import 'agent/aura_whitelist.dart';
+import 'secure_vault.dart';
 import 'providers/aura_state_provider.dart';
 
 typedef AuraToolStartedCallback = void Function(
@@ -89,13 +91,14 @@ List<double> extractFeatures(String domain) {
 
 class AuraAIBrain {
   static const String _modelAssetPath =
-      'assets/model/aura_brain_model.json';
+  'assets/model/aura_brain_model.enc';
   static const MethodChannel _engineChannel =
       MethodChannel('com.aura.cyberdefense/engine');
   static const MethodChannel _shieldChannel =
       MethodChannel('com.ciberdefensa.aura/shield');
 
   final AuraStateProvider? _stateProvider;
+  final AuraSecureVault _secureVault;
   final AuraToolStartedCallback? _onToolStarted;
   final AuraToolCompletedCallback? _onToolCompleted;
   AuraDnsBlockRuleHandler? _onDnsBlockRule;
@@ -103,10 +106,12 @@ class AuraAIBrain {
 
   AuraAIBrain({
     AuraStateProvider? stateProvider,
+    AuraSecureVault? secureVault,
     AuraToolStartedCallback? onToolStarted,
     AuraToolCompletedCallback? onToolCompleted,
     AuraDnsBlockRuleHandler? onDnsBlockRule,
-  })  : _stateProvider = stateProvider,
+    })  : _stateProvider = stateProvider,
+      _secureVault = secureVault ?? AuraSecureVault(),
         _onToolStarted = onToolStarted,
         _onToolCompleted = onToolCompleted,
         _onDnsBlockRule = onDnsBlockRule;
@@ -211,10 +216,14 @@ class AuraAIBrain {
   }
 
   Future<Map<String, dynamic>> _loadModel() async {
-    final encoded = await rootBundle.loadString(_modelAssetPath);
+    final encryptedHex = await rootBundle.loadString(_modelAssetPath);
+    final secureKey = await _secureVault.getOrCreateModelMasterKey();
+    final encoded = AuraCryptoLayer.decryptModel(encryptedHex, secureKey);
     final decoded = jsonDecode(encoded);
-    if (decoded is! Map) {
-      throw const FormatException('El modelo local no es un objeto JSON.');
+    if (decoded is! Map ||
+      decoded['trees'] is! List ||
+      (decoded['trees'] as List).length != 20) {
+      throw const FormatException('El modelo local no contiene un bosque válido.');
     }
     return Map<String, dynamic>.from(decoded);
   }

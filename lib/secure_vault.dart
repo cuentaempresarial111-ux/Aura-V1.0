@@ -4,6 +4,9 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AuraSecureVault {
   static const String _auditLogsKey = 'aura_audit_logs_v1';
+  static const String _modelMasterKeyStorageKey = 'aura_model_master_key_v1';
+  static const String defaultModelMasterKey =
+      'AuraMobileDefens::ModelMasterKey::2026::v1';
   static const int maxAuditLogs = 500;
   static const AndroidOptions _androidOptions = AndroidOptions(
     encryptedSharedPreferences: true,
@@ -16,6 +19,21 @@ class AuraSecureVault {
   AuraSecureVault({FlutterSecureStorage? storage})
       : _storage = storage ??
             const FlutterSecureStorage(aOptions: _androidOptions);
+
+  Future<String> getOrCreateModelMasterKey() async {
+    final existingKey = await _storage.read(key: _modelMasterKeyStorageKey);
+    if (existingKey != null && existingKey.isNotEmpty) return existingKey;
+
+    await _storage.write(
+      key: _modelMasterKeyStorageKey,
+      value: defaultModelMasterKey,
+    );
+    final persistedKey = await _storage.read(key: _modelMasterKeyStorageKey);
+    if (persistedKey != defaultModelMasterKey) {
+      throw StateError('No se pudo inicializar la clave del modelo en SecureVault.');
+    }
+    return persistedKey!;
+  }
 
   Future<void> saveAuditLogs(List<Map<String, dynamic>> newLogs) {
     final completion = Completer<void>();
