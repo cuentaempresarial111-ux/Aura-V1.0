@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">Aura Cyberdefense emblem</title>
+  <path fill="#146B62" d="M128 12 220 48v65c0 61-36 105-92 131-56-26-92-70-92-131V48z"/>
+  <path fill="#D8F3F0" d="M128 34 200 62v51c0 47-26 82-72 106-46-24-72-59-72-106V62z"/>
+  <path fill="#146B62" d="M128 63 150 108l49 7-36 35 9 49-44-23-44 23 9-49-36-35 49-7z"/>
+  <circle cx="128" cy="128" r="15" fill="#F0B94C"/>
+</svg>

@@ -1,0 +1,41 @@
+{
+  "model_name": "Aura Lexical Threat Forest",
+  "model_version": "1.0.0",
+  "model_type": "random_forest",
+  "training_status": "heuristic_seed",
+  "split_criterion": "entropy",
+  "feature_order": [
+    "length",
+    "shannon_entropy",
+    "digit_ratio",
+    "vowel_ratio",
+    "consonant_sequence_ratio",
+    "suspicious_tld"
+  ],
+  "classes": {
+    "0": "safe",
+    "1": "threat"
+  },
+  "trees": [
+    {"root": {"type": "split", "feature_index": 5, "threshold": 0.5, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 1, "threshold": 3.85, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 1, "threshold": 4.05, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 4, "threshold": 0.38, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 4, "threshold": 0.5, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 2, "threshold": 0.18, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 2, "threshold": 0.3, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 0, "threshold": 35, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 0, "threshold": 48, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 3, "threshold": 0.12, "left": {"type": "leaf", "value": 1}, "right": {"type": "leaf", "value": 0}}},
+    {"root": {"type": "split", "feature_index": 3, "threshold": 0.2, "left": {"type": "leaf", "value": 1}, "right": {"type": "leaf", "value": 0}}},
+    {"root": {"type": "split", "feature_index": 1, "threshold": 4.2, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 4, "threshold": 0.44, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 2, "threshold": 0.4, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 0, "threshold": 55, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 5, "threshold": 0.5, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 1, "threshold": 3.6, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 5, "threshold": 0.5, "left": {"type": "split", "feature_index": 1, "threshold": 4.0, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}, "right": {"type": "leaf", "value": 1}}},
+    {"root": {"type": "split", "feature_index": 0, "threshold": 28, "left": {"type": "split", "feature_index": 2, "threshold": 0.25, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}, "right": {"type": "split", "feature_index": 1, "threshold": 3.9, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}}},
+    {"root": {"type": "split", "feature_index": 4, "threshold": 0.32, "left": {"type": "split", "feature_index": 2, "threshold": 0.35, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}, "right": {"type": "split", "feature_index": 1, "threshold": 3.7, "left": {"type": "leaf", "value": 0}, "right": {"type": "leaf", "value": 1}}}}
+  ]
+}

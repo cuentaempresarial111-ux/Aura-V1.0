@@ -1,8 +1,8 @@
 # Aura Cyberdefense V1.0: Descripción oficial de la solución agéntica inteligente para Android sin privilegios root
 
-Aura Cyberdefense es una aplicación agéntica de ciberdefensa para Android, construida con Flutter, Dart y un motor de túnel nativo C. Opera sin privilegios root mediante `VpnService`; Android requiere autorización explícita del usuario para iniciar el túnel. La aplicación combina auditoría DNS local, telemetría de red, análisis de amenazas con Gemini, controles defensivos nativos y una interfaz accesible por voz.
+Aura Cyberdefense es una aplicación de ciberdefensa para Android, construida con Flutter, Dart y un motor de túnel nativo C. Opera sin privilegios root mediante `VpnService`; Android requiere autorización explícita del usuario para iniciar el túnel. La aplicación combina auditoría DNS local, telemetría de red, clasificación léxica local y controles defensivos nativos con una interfaz accesible por voz.
 
-Gemini necesita conectividad y una API key configurada por el usuario. La clave se conserva localmente mediante `flutter_secure_storage`; no se incluye en el código ni en el pipeline de Codemagic.
+La clasificación local carga un bosque heurístico desde `assets/model/aura_brain_model.json`. No usa red ni credenciales, no es un modelo entrenado con un conjunto de datos y no sustituye un servicio de reputación ni la revisión humana.
 
 ## Arquitectura de Ciberdefensa Avanzada
 
@@ -14,10 +14,8 @@ El camino de eventos y contramedidas está conectado de extremo a extremo:
 2. **C y JNI:** el motor informa el dominio, la acción y el origen mediante `hev_jni_report_dns_event`. JNI adjunta el hilo nativo a la JVM cuando es necesario y llama a `TProxyService.dispatchDnsEvent`.
 3. **Kotlin y EventChannel:** `AuraNetworkStream` conserva el código de acción (`ALLOWED`, `BLOCKED` o `DGA_ALERT`), resuelve la aplicación de origen fuera del hilo del túnel cuando Android lo permite y publica el mapa de evento en `com.aura.cyberdefense/network_stream`.
 4. **Auditor Dart:** `AuraNetworkAuditor` valida el evento, lo incorpora a su búfer acotado, persiste registros por lotes y, ante `BLOCKED` o `DGA_ALERT`, envía inmediatamente el JSON del evento a `AuraAIBrain.analyzeThreatPayload`.
-5. **Gemini Function Calling:** `AuraAIBrain` usa `google_generative_ai` y `gemini-2.5-flash`. Las declaraciones de función disponibles incluyen `mitigate_network_threat` y `isolate_malicious_app`. El procesamiento remoto es asíncrono, como exige una llamada de red.
-6. **Contramedida Kotlin/C:** si Gemini solicita mitigar un dominio, el callback del auditor invoca `addDnsBlockRule` por `MethodChannel`. `MainActivity` valida el dominio y llama a `TProxyService.TProxyBlockDomain`; JNI llega a la lista compartida de `hev-mapped-dns`, protegida por mutex. El resultado booleano vuelve a Dart y Gemini recibe la respuesta real de la herramienta. La regla es global para el dispositivo.
-
-`isolate_malicious_app` abre los ajustes Android de la aplicación indicada. No fuerza detención ni desinstalación: esas acciones requieren decisión del usuario o privilegios que una aplicación VPN ordinaria no posee.
+5. **Bosque léxico local:** `AuraAIBrain` carga el JSON con `rootBundle`, calcula longitud, entropía de Shannon, ratios de dígitos y vocales, secuencias consonánticas y TLD sospechosos; recorre los 20 árboles y promedia sus votos. El resultado es una heurística, no una probabilidad calibrada ni una garantía de detección.
+6. **Contramedida Kotlin/C:** cuando el voto mayoritario clasifica un dominio como amenaza, el callback del auditor invoca `addDnsBlockRule` por `MethodChannel`. `MainActivity` valida el dominio y llama a `TProxyService.TProxyBlockDomain`; JNI llega a la lista compartida de `hev-mapped-dns`, protegida por mutex. El resultado booleano vuelve a Dart y la regla, si se confirma, es global para el dispositivo.
 
 ### Canales de plataforma
 
@@ -36,7 +34,7 @@ El camino de eventos y contramedidas está conectado de extremo a extremo:
 |---|---|---|
 | `safe` | `idle_friendly`, azul | Estado normal. |
 | `warning` | `scanning_active`, naranja | Evento DNS `BLOCKED` o detección `DGA_ALERT` pendiente de evaluación. |
-| `critical` | `threat_mitigation_mode`, rojo | Gemini inicia una contramedida o el motor confirma una condición crítica. El provider notifica a la UI y solicita una alerta hablada en español mediante `flutter_tts`. |
+| `critical` | `threat_mitigation_mode`, rojo | El clasificador local determina una amenaza o el motor confirma una condición crítica. El provider notifica a la UI y solicita una alerta hablada en español mediante `flutter_tts`. |
 
 El provider notifica a sus oyentes al cambiar el estado y mantiene un máximo de 500 eventos en memoria. El `CustomPainter` usa el estado emocional para representar alerta y escaneo en el avatar.
 
@@ -46,7 +44,7 @@ El motor C descarta en el loop propietario del descriptor TUN los paquetes TCP/U
 
 Este control **bloquea** esos flujos; no descifra ni convierte una conexión DoH/DoT en una consulta UDP/53. Un downgrade transparente no es posible sin terminar el protocolo cifrado y cambiar el comportamiento de la aplicación cliente. Una app puede fallar o recurrir a otro resolvedor. La regla DoH se limita a las direcciones IPv4 enumeradas; no constituye bloqueo universal de todos los proveedores DoH, direcciones IPv6, DoQ ni resolvedores personalizados.
 
-La bóveda anterior basada en XOR y archivos temporales fue eliminada. `AuraSecureVault` usa exclusivamente `flutter_secure_storage` (`^9.2.4`), activa `encryptedSharedPreferences` y `resetOnError` en Android, guarda la API key y mantiene el historial como JSON limitado a 500 registros. El cifrado usa los mecanismos disponibles en el dispositivo; el respaldo hardware del Keystore no puede garantizarse desde la aplicación para todos los modelos.
+La bóveda anterior basada en XOR y archivos temporales fue eliminada. `AuraSecureVault` usa exclusivamente `flutter_secure_storage` (`^9.2.4`), activa `encryptedSharedPreferences` y `resetOnError` en Android, y mantiene el historial como JSON limitado a 500 registros. El cifrado usa los mecanismos disponibles en el dispositivo; el respaldo hardware del Keystore no puede garantizarse desde la aplicación para todos los modelos.
 
 La heurística DGA analiza nombres observados en DNS local. Es un indicador estructural, no un servicio de reputación, una prueba de malware ni una garantía de detección. La atribución de UID depende de las API y permisos disponibles; puede registrarse como `uid-unavailable`.
 
@@ -57,15 +55,15 @@ Las restricciones directas declaradas en `pubspec.yaml` son:
 | Paquete | Restricción | Función |
 |---|---:|---|
 | `provider` | `^6.1.2` | Estado reactivo de VPN, telemetría, presentación y avatar. |
-| `google_generative_ai` | `^0.4.7` | Gemini Function Calling asíncrono. |
-| `flutter_secure_storage` | `^9.2.4` | Almacenamiento local cifrado de clave y registros. |
+| `flutter_secure_storage` | `^9.2.4` | Almacenamiento local cifrado de registros de auditoría. |
 | `flutter_tts` | `^4.2.5` | Alertas y respuestas habladas en español. |
+| JSON de assets | local | Bosque de reglas heurísticas; no requiere dependencia de inferencia adicional. |
 
 El proyecto requiere Dart `>=3.0.0 <4.0.0` y usa Flutter del SDK. `pubspec.lock` determina las versiones resueltas; después de eliminarlo, `flutter pub get` volverá a resolver las restricciones y generará un lockfile nuevo.
 
 ## Pipelines de Integración Continua
 
-El workflow `android-build` de [`codemagic.yaml`](codemagic.yaml) está configurado para Flutter `3.47.5`, Java `21` y Android release. Para cada `push` en `main` o `principal`, configura `android/local.properties`, ejecuta `flutter clean`, `flutter pub get` y `flutter build apk --release`. El modelo se selecciona con `GEMINI_MODEL` y el valor predeterminado es `gemini-2.5-flash`.
+El workflow `android-build` de [`codemagic.yaml`](codemagic.yaml) está configurado para Flutter `3.47.5`, Java `21` y Android release. Para cada `push` en `main` o `principal`, configura `android/local.properties`, ejecuta `flutter clean`, `flutter pub get` y `flutter build apk --release`.
 
 La integración C se construye directamente con el NDK de Flutter mediante `android/app/build.gradle`, `Android.mk` y la tarea Gradle `buildHevSocks5Tunnel`, dependiente de `preBuild`. No requiere un paso manual separado en Codemagic. El flujo publica los APK de `build/app/outputs/flutter-apk/`.
 
@@ -81,8 +79,7 @@ pub_cache="${PUB_CACHE:-$HOME/.pub-cache}" && [[ -n "$pub_cache" && "$pub_cache"
 
 ```bash
 flutter pub get
-flutter build apk --release \
-  --dart-define="GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}"
+flutter build apk --release
 ```
 
-El APK se genera en `build/app/outputs/flutter-apk/`. El modelo no es la API key; configura la clave desde la aplicación y evita almacenarla en el repositorio o en logs de CI.
+El APK se genera en `build/app/outputs/flutter-apk/`.

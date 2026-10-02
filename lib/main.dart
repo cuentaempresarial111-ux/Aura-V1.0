@@ -103,6 +103,7 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
     super.initState();
     _voiceEngine = context.read<AuraVoiceEngine>();
     _aiBrain = AuraAIBrain(
+      stateProvider: context.read<AuraStateProvider>(),
       onToolStarted: _handleAgentToolStarted,
       onToolCompleted: _handleAgentToolCompleted,
     );
@@ -136,7 +137,7 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
       if ((level != SystemThreatLevel.secure || _agentToolActionOccurred) &&
           logs != _lastRecordedIntegrityLog) {
         final message = _agentToolActionOccurred
-            ? 'Acción defensiva de Gemini ejecutada; estado crítico retenido.'
+            ? 'Acción defensiva local ejecutada; estado crítico retenido.'
             : logs;
         _lastRecordedIntegrityLog = message;
         _writeSecureLog(message);
@@ -358,8 +359,9 @@ COMANDOS
   aplicación.
 • “Revisa/aisla [paquete]”: isolate_malicious_app abre los ajustes de Android.
   Aura no fuerza detención ni desinstalación.
-• Las consultas informativas se envían a Gemini y no ejecutan herramientas salvo
-  que su contenido y la directiva defensiva las justifiquen.
+• El motor local clasifica dominios mediante características léxicas y un bosque
+  de reglas JSON. No interpreta consultas generales ni reemplaza una revisión
+  humana; una predicción de amenaza solicita un bloqueo DNS global.
 
 INSPECCIÓN DNS
 El motor C analiza consultas UDP/53 en memoria. La heurística DGA actual marca
@@ -376,9 +378,9 @@ habilitados por PackageManager y por el ajuste seguro correspondiente del
 usuario. Un permiso declarado sin activación no cuenta como servicio activo.
 
 ACCIONES Y LÍMITES
-Las acciones de herramientas pasan por Android MethodChannel y sus respuestas
-reales se devuelven a Gemini. El callback táctico eleva la UI a estado crítico
-antes de ejecutar la acción y TTS anuncia resultado confirmado o error. Android
+Las acciones DNS pasan por Android MethodChannel y sus respuestas reales quedan
+registradas. El callback táctico eleva la UI a estado crítico y TTS anuncia el
+resultado confirmado o el error. Android
 puede denegar micrófono, VPN, visibilidad de paquetes o resolución de UID; Aura
 lo informa y no afirma haber realizado acciones que el sistema no confirmó.
 ''';
@@ -438,58 +440,8 @@ lo informa y no afirma haber realizado acciones que el sistema no confirmó.
     unawaited(_voiceEngine.announceToolResult(toolName, result));
   }
 
-  Future<String> _analyzeWithStoredKey(String prompt) async {
-    var response = await _aiBrain.analyzeCyberThreat(prompt);
-    if (!response.startsWith('CONFIGURACIÓN REQUERIDA:')) return response;
-
-    final apiKey = await _requestGeminiApiKey();
-    if (apiKey == null || apiKey.trim().isEmpty) {
-      return 'Consulta cancelada: no se configuró la clave de Gemini.';
-    }
-
-    try {
-      await _aiBrain.saveApiKey(apiKey);
-    } catch (_) {
-      return 'No se pudo guardar la clave de Gemini en el almacenamiento seguro.';
-    }
-    response = await _aiBrain.analyzeCyberThreat(prompt);
-    return response;
-  }
-
-  Future<String?> _requestGeminiApiKey() async {
-    final controller = TextEditingController();
-    try {
-      return await showDialog<String>(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Configurar Gemini'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            obscureText: true,
-            enableSuggestions: false,
-            autocorrect: false,
-            decoration: const InputDecoration(
-              labelText: 'API key',
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancelar'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(controller.text),
-              child: const Text('Guardar cifrada'),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      controller.dispose();
-    }
-  }
+  Future<String> _analyzeWithStoredKey(String prompt) =>
+      _aiBrain.analyzeCyberThreat(prompt);
 
   Future<void> _toggleNetworkShield() async {
     final requestedState = !_shieldActive;

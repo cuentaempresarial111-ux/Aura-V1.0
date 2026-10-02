@@ -25,8 +25,7 @@ workflows:
           cd "${CM_BUILD_DIR:?CM_BUILD_DIR is required}"
           flutter clean
           flutter pub get
-          gemini_model="${GEMINI_MODEL:-gemini-2.5-flash}"
-          flutter build apk --release --dart-define="GEMINI_MODEL=${gemini_model}"
+          flutter build apk --release
     artifacts:
       - build/app/outputs/flutter-apk/*.apk
       

@@ -5,7 +5,7 @@ import '../ai_brain.dart';
 class AiBrain {
   final AuraAIBrain _delegate;
 
-  AiBrain({String? apiKey}) : _delegate = AuraAIBrain(apiKey: apiKey);
+  AiBrain() : _delegate = AuraAIBrain();
 
   Future<String> analizarAmenazaReal({
     required String tipoEvento,

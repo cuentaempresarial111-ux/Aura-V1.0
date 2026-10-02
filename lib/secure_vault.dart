@@ -4,7 +4,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AuraSecureVault {
   static const String _auditLogsKey = 'aura_audit_logs_v1';
-  static const String _geminiApiKeyStorageKey = 'aura_gemini_api_key';
   static const int maxAuditLogs = 500;
   static const AndroidOptions _androidOptions = AndroidOptions(
     encryptedSharedPreferences: true,
@@ -17,24 +16,6 @@ class AuraSecureVault {
   AuraSecureVault({FlutterSecureStorage? storage})
       : _storage = storage ??
             const FlutterSecureStorage(aOptions: _androidOptions);
-
-  Future<void> saveApiKey(String apiKey) async {
-    final normalizedApiKey = apiKey.trim();
-    if (normalizedApiKey.isEmpty) {
-      throw ArgumentError.value(apiKey, 'apiKey', 'La clave no puede estar vacía.');
-    }
-    await _storage.write(key: _geminiApiKeyStorageKey, value: normalizedApiKey);
-  }
-
-  Future<String?> getApiKey() => _storage.read(key: _geminiApiKeyStorageKey);
-
-  Future<void> deleteApiKey() => _storage.delete(key: _geminiApiKeyStorageKey);
-
-  Future<void> saveGeminiApiKey(String apiKey) => saveApiKey(apiKey);
-
-  Future<String?> readGeminiApiKey() => getApiKey();
-
-  Future<void> deleteGeminiApiKey() => deleteApiKey();
 
   Future<void> saveAuditLogs(List<Map<String, dynamic>> newLogs) {
     final completion = Completer<void>();
