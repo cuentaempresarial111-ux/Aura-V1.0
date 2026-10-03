@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:local_auth/local_auth.dart';
 
 import '../ai_brain.dart';
 import '../secure_vault.dart';
@@ -17,11 +19,13 @@ class SplashScreen extends StatefulWidget {
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _animationController;
+  final LocalAuthentication _auth = LocalAuthentication();
   late final AuraSecureVault _secureVault;
   late final AuraAIBrain _aiBrain;
   double _loadingProgress = 0;
   String _bootStatusText = 'INICIALIZANDO BÓVEDA SEGURA...';
-  bool _bootFailed = false;
+  bool _isAuthFailed = false;
+  bool _isAuthenticating = false;
 
   @override
   void initState() {
@@ -43,48 +47,90 @@ class _SplashScreenState extends State<SplashScreen>
 
   Future<void> _initializeSystem() async {
     setState(() {
-      _bootFailed = false;
-      _loadingProgress = 0.12;
-      _bootStatusText = 'INICIALIZANDO BÓVEDA SEGURA...';
+      _isAuthFailed = false;
+      _loadingProgress = 0;
+      _bootStatusText = 'VERIFICANDO HARDWARE DE HUELLA...';
+    });
+    await _authenticateUser();
+  }
+
+  Future<void> _authenticateUser() async {
+    if (_isAuthenticating) return;
+    setState(() {
+      _isAuthenticating = true;
+      _isAuthFailed = false;
+      _bootStatusText = 'VERIFICANDO HARDWARE DE HUELLA...';
     });
 
     try {
+      final canCheckBiometrics = await _auth.canCheckBiometrics;
+      if (!canCheckBiometrics) {
+        _showAuthenticationFailure('NO HAY HARDWARE BIOMÉTRICO DISPONIBLE.');
+        return;
+      }
+
+      final availableBiometrics = await _auth.getAvailableBiometrics();
+      if (!availableBiometrics.contains(BiometricType.fingerprint)) {
+        _showAuthenticationFailure('NO HAY HUELLA DACTILAR REGISTRADA.');
+        return;
+      }
+
+      final authenticated = await _auth.authenticate(
+        localizedReason:
+            'Autentique su identidad para desbloquear Aura Mobile Defens',
+        options: const AuthenticationOptions(
+          stickyAuth: true,
+          biometricOnly: true,
+          useErrorDialogs: true,
+        ),
+      );
+      if (!authenticated) {
+        _showAuthenticationFailure('ACCESO DENEGADO - NÚCLEO BLOQUEADO.');
+        return;
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _loadingProgress = 0.35;
+        _bootStatusText = 'HUELLA VALIDADA; INICIALIZANDO BÓVEDA SEGURA...';
+      });
       await _secureVault.getOrCreateModelMasterKey();
       if (!mounted) return;
       setState(() {
-        _loadingProgress = 0.42;
-        _bootStatusText = 'DESCIFRANDO Y VALIDANDO BOSQUE LOCAL...';
+        _loadingProgress = 0.55;
+        _bootStatusText = 'DESCIFRANDO MODELO AES-256...';
       });
-
       await _aiBrain.preloadModel();
       if (!mounted) return;
       setState(() {
-        _loadingProgress = 0.78;
+        _loadingProgress = 0.85;
         _bootStatusText = 'BOSQUE LOCAL VALIDADO: 20 ÁRBOLES.';
       });
-
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      if (!mounted) return;
-      setState(() {
-        _loadingProgress = 0.92;
-        _bootStatusText = 'VPN DISPONIBLE; ANDROID REQUIERE CONSENTIMIENTO.';
-      });
-
-      await Future<void>.delayed(const Duration(milliseconds: 450));
+      await Future<void>.delayed(const Duration(milliseconds: 350));
       if (!mounted) return;
       setState(() {
         _loadingProgress = 1;
-        _bootStatusText = 'AURA MOBILE DEFENS ACTIVA.';
+        _bootStatusText = 'AURA LISTA; EL TÚNEL VPN REQUIERE CONSENTIMIENTO.';
       });
       await Future<void>.delayed(const Duration(milliseconds: 350));
       _navigateToCore();
-    } on Object {
-      if (!mounted) return;
-      setState(() {
-        _bootFailed = true;
-        _bootStatusText = 'FALLO DE INICIALIZACIÓN. REINTENTA EL ARRANQUE.';
-      });
+    } on PlatformException catch (error) {
+      _showAuthenticationFailure(
+        'ERROR DE ACCESO BIOMÉTRICO: ${error.message ?? error.code}',
+      );
+    } on Object catch (error) {
+      _showAuthenticationFailure('ERROR DE INICIALIZACIÓN: $error');
+    } finally {
+      if (mounted) setState(() => _isAuthenticating = false);
     }
+  }
+
+  void _showAuthenticationFailure(String message) {
+    if (!mounted) return;
+    setState(() {
+      _isAuthFailed = true;
+      _bootStatusText = message;
+    });
   }
 
   void _navigateToCore() {
@@ -140,14 +186,20 @@ class _SplashScreenState extends State<SplashScreen>
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             border: Border.all(
-                              color: AuraTokens.accent.withValues(
+                              color: (_isAuthFailed
+                                      ? AuraTokens.danger
+                                      : AuraTokens.accent)
+                                  .withValues(
                                 alpha: 0.2 + pulse * 0.3,
                               ),
                               width: 1.5,
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: AuraTokens.accent.withValues(
+                                color: (_isAuthFailed
+                                        ? AuraTokens.danger
+                                        : AuraTokens.accent)
+                                    .withValues(
                                   alpha: 0.1 + pulse * 0.25,
                                 ),
                                 blurRadius: 40 + pulse * 25,
@@ -159,7 +211,10 @@ class _SplashScreenState extends State<SplashScreen>
                             child: Icon(
                               Icons.shield_moon_rounded,
                               size: 72,
-                              color: AuraTokens.accent.withValues(
+                              color: (_isAuthFailed
+                                      ? AuraTokens.danger
+                                      : AuraTokens.accent)
+                                  .withValues(
                                 alpha: 0.7 + pulse * 0.3,
                               ),
                             ),
@@ -196,8 +251,10 @@ class _SplashScreenState extends State<SplashScreen>
                             value: _loadingProgress,
                             minHeight: 2,
                             backgroundColor: AuraTokens.surfaceAlt,
-                            valueColor: const AlwaysStoppedAnimation<Color>(
-                              AuraTokens.accent,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              _isAuthFailed
+                                  ? AuraTokens.danger
+                                  : AuraTokens.accent,
                             ),
                           ),
                           const SizedBox(height: AuraTokens.s3),
@@ -205,15 +262,17 @@ class _SplashScreenState extends State<SplashScreen>
                             _bootStatusText,
                             textAlign: TextAlign.center,
                             style: const TextStyle(
-                              color: AuraTokens.accent,
+                                color: _isAuthFailed
+                                  ? AuraTokens.danger
+                                  : AuraTokens.accent,
                               fontSize: 10,
                               fontFamily: 'monospace',
                             ),
                           ),
-                          if (_bootFailed) ...[
+                          if (_isAuthFailed && !_isAuthenticating) ...[
                             const SizedBox(height: AuraTokens.s2),
                             IconButton(
-                              tooltip: 'Reintentar inicialización',
+                              tooltip: 'Reintentar autenticación biométrica',
                               onPressed: _initializeSystem,
                               icon: const Icon(
                                 Icons.refresh,

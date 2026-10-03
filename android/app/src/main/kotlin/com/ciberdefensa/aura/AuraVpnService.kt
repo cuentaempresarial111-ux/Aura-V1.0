@@ -3,12 +3,14 @@ package com.ciberdefensa.aura
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.Service
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import hev.htproxy.TProxyService
 import java.io.File
 import java.io.IOException
@@ -32,8 +34,11 @@ class AuraVpnService : VpnService() {
         private const val SOCKS5_PORT = 1080
         private const val THREAT_FEED_URL =
             "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"
-        private const val NOTIFICATION_CHANNEL = "aura_vpn"
-        private const val NOTIFICATION_ID = 1080
+        private const val NOTIFICATION_CHANNEL = "com.aura.mobile.defens.vpn"
+        private const val NOTIFICATION_CHANNEL_NAME = "Aura Centinela"
+        private const val NOTIFICATION_ID = 8816
+        private const val NOTIFICATION_TEXT =
+            "Protección agéntica local en tiempo real operando sin interrupciones."
         private const val MAX_BLOCKED_IPS = 8192
         private val dnsMetricsLock = Any()
         @Volatile private var activeService: AuraVpnService? = null
@@ -84,9 +89,11 @@ class AuraVpnService : VpnService() {
         flags: Int,
         startId: Int,
     ): Int {
-        startForeground(NOTIFICATION_ID, createNotification())
-        if (!verifyIntegrityOrStop()) return START_NOT_STICKY
-        if (integrityMonitor.isShutdown) return START_NOT_STICKY
+        ensureNotificationChannel()
+        val notification = createNotification()
+        startForeground(NOTIFICATION_ID, notification)
+        if (!verifyIntegrityOrStop()) return Service.START_NOT_STICKY
+        if (integrityMonitor.isShutdown) return Service.START_NOT_STICKY
         if (!integrityCheckScheduled) {
             integrityCheckScheduled = true
             integrityMonitor.scheduleWithFixedDelay(
@@ -101,7 +108,7 @@ class AuraVpnService : VpnService() {
         } else if (startRequested.compareAndSet(false, true)) {
             worker.execute { startTunnel() }
         }
-        return START_STICKY
+        return Service.START_STICKY
     }
 
     override fun onDestroy() {
@@ -318,31 +325,32 @@ mapdns:
     }
 
     private fun createNotification(
-        contentText: String = "Túnel activo · esperando eventos DNS",
+        contentText: String = NOTIFICATION_TEXT,
     ): Notification {
+        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL)
+            .setContentTitle("🛡️ Aura Centinela Activo")
+            .setContentText(NOTIFICATION_TEXT)
+            .setSubText(contentText.takeIf { it != NOTIFICATION_TEXT })
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
+    private fun ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+
         val manager = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            manager.getNotificationChannel(NOTIFICATION_CHANNEL) == null
-        ) {
+        if (manager.getNotificationChannel(NOTIFICATION_CHANNEL) == null) {
             manager.createNotificationChannel(
                 NotificationChannel(
                     NOTIFICATION_CHANNEL,
-                    "Aura VPN",
+                    NOTIFICATION_CHANNEL_NAME,
                     NotificationManager.IMPORTANCE_LOW,
                 ),
             )
         }
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, NOTIFICATION_CHANNEL)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
-        return builder
-            .setContentTitle("Aura Network Shield")
-            .setContentText(contentText)
-            .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setOngoing(true)
-            .build()
     }
 }

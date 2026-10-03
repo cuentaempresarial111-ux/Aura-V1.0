@@ -15,7 +15,7 @@ import android.content.pm.ApplicationInfo
 import java.io.File
 import java.security.KeyStore
 import java.security.MessageDigest
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
@@ -144,7 +144,7 @@ object AuraAntiTampering {
     }
 }
 
-class MainActivity: FlutterActivity() {
+class MainActivity: FlutterFragmentActivity() {
     private companion object {
         const val VPN_PERMISSION_REQUEST = 1081
         const val VOICE_REQUEST = 1082
