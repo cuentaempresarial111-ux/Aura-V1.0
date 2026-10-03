@@ -8,6 +8,7 @@ on:
       - '.github/workflows/deploy-model-pages.yml'
       - 'assets/model/aura_brain_model.json'
       - 'assets/model/aura_brain_model.json.sha256'
+      - 'assets/model/aura_brain_model.json.sig'
   workflow_dispatch:
 
 permissions:
@@ -21,6 +22,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: ${{ hashFiles('assets/model/aura_brain_model.json.sig') != '' }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -33,6 +35,7 @@ jobs:
           mkdir -p _site/model
           cp assets/model/aura_brain_model.json _site/model/
           cp assets/model/aura_brain_model.json.sha256 _site/model/
+          cp assets/model/aura_brain_model.json.sig _site/model/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

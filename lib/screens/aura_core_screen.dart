@@ -1,7 +1,3 @@
-import 'dart:async';
-import 'dart:math' as math;
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -24,25 +20,33 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
       MethodChannel('com.ciberdefensa.aura/voice');
 
   final TextEditingController _inputController = TextEditingController();
-  late final AnimationController _floatController;
+  final ScrollController _scrollController = ScrollController();
+  late final AnimationController _cursorBlink;
   bool _isListening = false;
   bool _isRunning = false;
+  int _lastRenderedEventCount = -1;
 
   @override
   void initState() {
     super.initState();
-    AgentController.instance.bindSecurityState(
-      context.read<AuraStateProvider>(),
-    );
-    _floatController = AnimationController(
+    _cursorBlink = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 3200),
+      duration: const Duration(milliseconds: 750),
+      lowerBound: 0.15,
+      upperBound: 1,
     )..repeat(reverse: true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final controller = AgentController.instance;
+      controller.bindSecurityState(context.read<AuraStateProvider>());
+      controller.initGreeting();
+    });
   }
 
   @override
   void dispose() {
-    _floatController.dispose();
+    _cursorBlink.dispose();
+    _scrollController.dispose();
     _inputController.dispose();
     super.dispose();
   }
@@ -92,290 +96,107 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
     }
   }
 
-  Color _avatarColor(AuraSecurityLevel level) => switch (level) {
-        AuraSecurityLevel.safe => AuraTokens.accent,
-        AuraSecurityLevel.warning => AuraTokens.warning,
-        AuraSecurityLevel.critical => AuraTokens.danger,
-      };
+  void _scrollToLatest(int eventCount) {
+    if (eventCount == _lastRenderedEventCount) return;
+    _lastRenderedEventCount = eventCount;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+      );
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final security = context.watch<AuraStateProvider>();
-    final avatarColor = _avatarColor(security.securityLevel);
 
     return Scaffold(
-      backgroundColor: AuraTokens.bg,
+      backgroundColor: Colors.black,
+      resizeToAvoidBottomInset: true,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(AuraTokens.s4),
-          child: Column(
-            children: [
-              Expanded(
-                flex: 52,
-                child: _AvatarStage(
-                  animation: _floatController,
-                  color: avatarColor,
-                  security: security.securityLevel,
-                  isProcessing: _isRunning || security.isAiProcessing,
-                ),
-              ),
-              const SizedBox(height: AuraTokens.s3),
-              Expanded(
-                flex: 48,
-                child: _AgentConsole(
-                  controller: AgentController.instance,
-                  textController: _inputController,
-                  isListening: _isListening,
-                  isRunning: _isRunning,
-                  onSubmit: _dispatch,
-                  onVoice: _captureVoice,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _AvatarStage extends StatelessWidget {
-  const _AvatarStage({
-    required this.animation,
-    required this.color,
-    required this.security,
-    required this.isProcessing,
-  });
-
-  final Animation<double> animation;
-  final Color color;
-  final AuraSecurityLevel security;
-  final bool isProcessing;
-
-  @override
-  Widget build(BuildContext context) {
-    final stateLabel = switch (security) {
-      AuraSecurityLevel.safe => 'NÚCLEO ESTABLE',
-      AuraSecurityLevel.warning => 'ATENCIÓN REQUERIDA',
-      AuraSecurityLevel.critical => 'MITIGACIÓN ACTIVA',
-    };
-
-    return Column(
-      children: [
-        Row(
+        child: Column(
           children: [
-            Icon(Icons.radar, color: color, size: 18),
-            const SizedBox(width: AuraTokens.s2),
-            Text(
-              'AURA / DEFENSA LOCAL',
-              style: TextStyle(
-                color: AuraTokens.textMuted,
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
+            _TerminalHeader(
+              securityLevel: security.securityLevel,
+            ),
+            const Divider(height: 1, color: Color(0xFF17352B)),
+            Expanded(
+              child: StreamBuilder<AgentEvent>(
+                stream: AgentController.instance.events,
+                builder: (context, snapshot) {
+                  final events = List<AgentEvent>.of(
+                    AgentController.instance.history,
+                    growable: false,
+                  );
+                  _scrollToLatest(events.length);
+                  return ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
+                    itemCount: events.length,
+                    itemBuilder: (context, index) =>
+                        _SyslogLine(event: events[index]),
+                  );
+                },
               ),
             ),
-            const Spacer(),
-            Text(
-              stateLabel,
-              style: TextStyle(
-                color: color,
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-              ),
+            _TerminalInput(
+              controller: _inputController,
+              cursorAnimation: _cursorBlink,
+              isListening: _isListening,
+              isRunning: _isRunning,
+              onSubmitted: _dispatch,
+              onVoice: _captureVoice,
             ),
           ],
         ),
-        Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final size = math.min(
-                math.min(constraints.maxWidth * 0.86, constraints.maxHeight * 0.9),
-                300.0,
-              );
-              return Center(
-                child: AnimatedBuilder(
-                  animation: animation,
-                  builder: (context, child) => Transform.translate(
-                    offset: Offset(0, math.sin(animation.value * math.pi) * 5),
-                    child: child,
-                  ),
-                  child: Container(
-                    width: size,
-                    height: size,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: color.withValues(alpha: 0.12),
-                          blurRadius: 48,
-                          spreadRadius: 4,
-                        ),
-                      ],
-                    ),
-                    child: CustomPaint(
-                      painter: _AuraAvatarPainter(
-                        animation: animation,
-                        color: color,
-                        isProcessing: isProcessing,
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ],
+      ),
     );
   }
 }
 
-class _AgentConsole extends StatelessWidget {
-  const _AgentConsole({
-    required this.controller,
-    required this.textController,
-    required this.isListening,
-    required this.isRunning,
-    required this.onSubmit,
-    required this.onVoice,
+class _TerminalHeader extends StatelessWidget {
+  const _TerminalHeader({
+    required this.securityLevel,
   });
 
-  final AgentController controller;
-  final TextEditingController textController;
-  final bool isListening;
-  final bool isRunning;
-  final ValueChanged<String> onSubmit;
-  final VoidCallback onVoice;
+  final AuraSecurityLevel securityLevel;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AuraTokens.surface,
-        borderRadius: BorderRadius.circular(AuraTokens.rLg),
-        border: Border.all(color: AuraTokens.surfaceAlt, width: 1.2),
-        boxShadow: [
-          BoxShadow(
-            color: AuraTokens.accent.withValues(alpha: 0.06),
-            blurRadius: 24,
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.all(AuraTokens.s3),
-      child: Column(
+    final (status, color) = switch (securityLevel) {
+      AuraSecurityLevel.safe => ('LOCAL / READY', AuraTokens.success),
+      AuraSecurityLevel.warning => ('LOCAL / REVIEW', AuraTokens.warning),
+      AuraSecurityLevel.critical => ('LOCAL / CRITICAL', AuraTokens.danger),
+    };
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+      child: Row(
         children: [
-          Row(
-            children: [
-              const Icon(Icons.terminal, color: AuraTokens.accent, size: 18),
-              const SizedBox(width: AuraTokens.s2),
-              const Text(
-                'CONSOLA TÁCTICA',
-                style: TextStyle(
-                  color: AuraTokens.textPrimary,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                ),
+          const Icon(Icons.terminal, color: AuraTokens.accent, size: 19),
+          const SizedBox(width: 9),
+          const Expanded(
+            child: Text(
+              'AURA // TACTICAL CONSOLE',
+              style: TextStyle(
+                color: AuraTokens.success,
+                fontFamily: 'monospace',
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5,
               ),
-              const Spacer(),
-              Container(
-                width: 7,
-                height: 7,
-                decoration: BoxDecoration(
-                  color: isRunning ? AuraTokens.warning : AuraTokens.success,
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: AuraTokens.s1),
-              Text(
-                isRunning ? 'PROCESANDO' : 'EN LÍNEA',
-                style: const TextStyle(
-                  color: AuraTokens.textMuted,
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AuraTokens.s2),
-          Expanded(
-            child: StreamBuilder<AgentEvent>(
-              stream: controller.events,
-              builder: (context, snapshot) {
-                final events = controller.history.reversed.toList(
-                  growable: false,
-                );
-                if (events.isEmpty) {
-                  return Center(
-                    child: Text(
-                      snapshot.connectionState == ConnectionState.waiting
-                          ? 'Canal agéntico preparado.'
-                          : 'Esperando una instrucción local.',
-                      style: const TextStyle(
-                        color: AuraTokens.textMuted,
-                        fontSize: 11,
-                      ),
-                    ),
-                  );
-                }
-                return ListView.builder(
-                  reverse: true,
-                  itemCount: events.length,
-                  itemBuilder: (context, index) => _EventBubble(
-                    event: events[index],
-                  ),
-                );
-              },
             ),
           ),
-          const SizedBox(height: AuraTokens.s2),
-          Container(
-            decoration: BoxDecoration(
-              color: AuraTokens.bg,
-              borderRadius: BorderRadius.circular(AuraTokens.rMd),
-              border: Border.all(color: AuraTokens.surfaceAlt),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: AuraTokens.s1),
-            child: Row(
-              children: [
-                IconButton(
-                  tooltip: isListening ? 'Escuchando' : 'Dictar instrucción',
-                  onPressed: isRunning ? null : onVoice,
-                  icon: Icon(
-                    isListening ? Icons.hearing : Icons.mic_none,
-                    color: isListening ? AuraTokens.warning : AuraTokens.accent,
-                    size: 20,
-                  ),
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: textController,
-                    enabled: !isRunning,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: onSubmit,
-                    style: const TextStyle(
-                      color: AuraTokens.textPrimary,
-                      fontSize: 13,
-                    ),
-                    decoration: const InputDecoration(
-                      hintText: 'Orden para Aura…',
-                      hintStyle: TextStyle(color: AuraTokens.textMuted),
-                      border: InputBorder.none,
-                      isDense: true,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Enviar instrucción',
-                  onPressed: isRunning
-                      ? null
-                      : () => onSubmit(textController.text),
-                  icon: const Icon(
-                    Icons.arrow_upward,
-                    color: AuraTokens.accent,
-                    size: 20,
-                  ),
-                ),
-              ],
+          Text(
+            status,
+            style: TextStyle(
+              color: color,
+              fontFamily: 'monospace',
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ],
@@ -384,207 +205,145 @@ class _AgentConsole extends StatelessWidget {
   }
 }
 
-class _EventBubble extends StatelessWidget {
-  const _EventBubble({required this.event});
+class _SyslogLine extends StatelessWidget {
+  const _SyslogLine({required this.event});
 
   final AgentEvent event;
 
   @override
   Widget build(BuildContext context) {
-    final color = switch (event.kind) {
-      AgentEventKind.thought => AuraTokens.textMuted,
-      AgentEventKind.action => AuraTokens.accent,
-      AgentEventKind.success => AuraTokens.success,
-      AgentEventKind.warning => AuraTokens.warning,
-      AgentEventKind.error => AuraTokens.danger,
+    final (prefix, color) = switch (event.kind) {
+      AgentEventKind.thought => ('[  INF  ] ', AuraTokens.textMuted),
+      AgentEventKind.action => ('[  NET  ] ', AuraTokens.accent),
+      AgentEventKind.success => ('[  OK   ] ', AuraTokens.success),
+      AgentEventKind.warning => ('[  WARN ] ', AuraTokens.warning),
+      AgentEventKind.error => ('[  CRIT ] ', AuraTokens.danger),
     };
-    final icon = switch (event.kind) {
-      AgentEventKind.thought => Icons.psychology_alt_outlined,
-      AgentEventKind.action => Icons.bolt,
-      AgentEventKind.success => Icons.verified_outlined,
-      AgentEventKind.warning => Icons.warning_amber_rounded,
-      AgentEventKind.error => Icons.error_outline,
-    };
+    final timestamp =
+        '${event.ts.hour.toString().padLeft(2, '0')}:'
+        '${event.ts.minute.toString().padLeft(2, '0')}:'
+        '${event.ts.second.toString().padLeft(2, '0')}';
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: AuraTokens.s2),
+      padding: const EdgeInsets.only(bottom: 11),
+      child: SelectableText.rich(
+        TextSpan(
+          children: [
+            TextSpan(
+              text: '$timestamp ',
+              style: const TextStyle(color: AuraTokens.textMuted),
+            ),
+            TextSpan(
+              text: prefix,
+              style: TextStyle(color: color, fontWeight: FontWeight.w700),
+            ),
+            TextSpan(
+              text: event.message,
+              style: TextStyle(color: color),
+            ),
+          ],
+        ),
+        style: const TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 12,
+          height: 1.45,
+        ),
+      ),
+    );
+  }
+}
+
+class _TerminalInput extends StatelessWidget {
+  const _TerminalInput({
+    required this.controller,
+    required this.cursorAnimation,
+    required this.isListening,
+    required this.isRunning,
+    required this.onSubmitted,
+    required this.onVoice,
+  });
+
+  final TextEditingController controller;
+  final Animation<double> cursorAnimation;
+  final bool isListening;
+  final bool isRunning;
+  final ValueChanged<String> onSubmitted;
+  final VoidCallback onVoice;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 9, 10, 8),
+      decoration: const BoxDecoration(
+        color: Colors.black,
+        border: Border(top: BorderSide(color: Color(0xFF17352B))),
+      ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(icon, color: color, size: 15),
-          const SizedBox(width: AuraTokens.s2),
+          const Text(
+            'aura@cyberdefense:~# ',
+            style: TextStyle(
+              color: AuraTokens.accent,
+              fontFamily: 'monospace',
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  event.message,
-                  style: TextStyle(color: color, fontSize: 11, height: 1.35),
+            child: TextField(
+              controller: controller,
+              enabled: !isRunning,
+              autofocus: true,
+              textInputAction: TextInputAction.send,
+              onSubmitted: onSubmitted,
+              cursorColor: AuraTokens.accent,
+              style: const TextStyle(
+                color: AuraTokens.success,
+                fontFamily: 'monospace',
+                fontSize: 12,
+              ),
+              decoration: const InputDecoration(
+                hintText: 'comando o consulta táctica',
+                hintStyle: TextStyle(
+                  color: AuraTokens.textMuted,
+                  fontFamily: 'monospace',
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '${event.ts.hour.toString().padLeft(2, '0')}:'
-                  '${event.ts.minute.toString().padLeft(2, '0')}:'
-                  '${event.ts.second.toString().padLeft(2, '0')}',
-                  style: const TextStyle(
-                    color: AuraTokens.textMuted,
-                    fontSize: 8,
-                  ),
-                ),
-              ],
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(vertical: 9),
+              ),
+            ),
+          ),
+          AnimatedBuilder(
+            animation: cursorAnimation,
+            builder: (context, child) => Opacity(
+              opacity: cursorAnimation.value,
+              child: child,
+            ),
+            child: const Text(
+              '█',
+              style: TextStyle(
+                color: AuraTokens.accent,
+                fontFamily: 'monospace',
+                fontSize: 13,
+              ),
+            ),
+          ),
+          const SizedBox(width: 3),
+          IconButton(
+            tooltip: isListening ? 'Escuchando' : 'Dictar consulta',
+            onPressed: isRunning || isListening ? null : onVoice,
+            constraints: const BoxConstraints.tightFor(width: 38, height: 38),
+            padding: EdgeInsets.zero,
+            icon: Icon(
+              isListening ? Icons.hearing : Icons.mic_none,
+              color: isListening ? AuraTokens.warning : AuraTokens.accent,
+              size: 18,
             ),
           ),
         ],
       ),
     );
-  }
-}
-
-class _AuraAvatarPainter extends CustomPainter {
-  _AuraAvatarPainter({
-    required this.animation,
-    required this.color,
-    required this.isProcessing,
-  }) : super(repaint: animation);
-
-  final Animation<double> animation;
-  final Color color;
-  final bool isProcessing;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final pulse = animation.value;
-    final face = Path()
-      ..moveTo(size.width * 0.27, size.height * 0.16)
-      ..lineTo(size.width * 0.73, size.height * 0.16)
-      ..lineTo(size.width * 0.84, size.height * 0.47)
-      ..lineTo(size.width * 0.55, size.height * 0.82)
-      ..lineTo(size.width * 0.45, size.height * 0.82)
-      ..lineTo(size.width * 0.16, size.height * 0.47)
-      ..close();
-
-    canvas.save();
-    if (isProcessing) {
-      canvas.translate(0, math.sin(pulse * math.pi * 2) * 2);
-    }
-    canvas.drawPath(
-      face,
-      Paint()
-        ..color = color.withValues(alpha: 0.09 + pulse * 0.04)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18),
-    );
-    canvas.drawPath(
-      face,
-      Paint()
-        ..color = color.withValues(alpha: 0.64)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.6,
-    );
-    final eyePaint = Paint()
-      ..color = color.withValues(alpha: 0.82 + pulse * 0.16)
-      ..style = PaintingStyle.fill;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          size.width * 0.31,
-          size.height * 0.42,
-          size.width * 0.15,
-          size.height * 0.035,
-        ),
-        Radius.circular(size.height * 0.02),
-      ),
-      eyePaint,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          size.width * 0.54,
-          size.height * 0.42,
-          size.width * 0.15,
-          size.height * 0.035,
-        ),
-        Radius.circular(size.height * 0.02),
-      ),
-      eyePaint,
-    );
-    final mouth = Path()
-      ..moveTo(size.width * 0.4, size.height * 0.65)
-      ..quadraticBezierTo(
-        size.width * 0.5,
-        size.height * (0.67 + pulse * 0.025),
-        size.width * 0.6,
-        size.height * 0.65,
-      );
-    canvas.drawPath(
-      mouth,
-      Paint()
-        ..color = color.withValues(alpha: 0.76)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5,
-    );
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(covariant _AuraAvatarPainter oldDelegate) =>
-      oldDelegate.animation != animation ||
-      oldDelegate.color != color ||
-      oldDelegate.isProcessing != isProcessing;
-}
-
-class AuraHolographicHud extends StatelessWidget {
-  const AuraHolographicHud({
-    required this.state,
-    required this.tunnelActive,
-    required this.accentColor,
-    super.key,
-  });
-
-  final AuraStateProvider state;
-  final bool tunnelActive;
-  final Color accentColor;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(AuraTokens.rSm),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: Container(
-          padding: const EdgeInsets.all(AuraTokens.s2),
-          decoration: BoxDecoration(
-            color: AuraTokens.surface.withValues(alpha: 0.78),
-            border: Border.all(color: AuraTokens.surfaceAlt),
-            borderRadius: BorderRadius.circular(AuraTokens.rSm),
-          ),
-          child: Row(
-            children: [
-              Expanded(child: _hudValue('TUN', _formatBytes(state.tunnelBytesProcessed))),
-              Expanded(child: _hudValue('BOSQUE', '${state.localForestEvaluations}')),
-              Expanded(
-                child: _hudValue(
-                  'DoH/DoT',
-                  tunnelActive ? '${state.encryptedDnsBlocks} BLOQUEOS' : 'INACTIVO',
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _hudValue(String label, String value) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: const TextStyle(color: AuraTokens.textMuted, fontSize: 8)),
-          Text(value, style: TextStyle(color: accentColor, fontSize: 10)),
-        ],
-      );
-
-  String _formatBytes(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 }

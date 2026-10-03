@@ -15,7 +15,130 @@ class AgentController {
   static final AgentController instance = AgentController._();
 
   static const int maxHistoryLength = 500;
+  static const String kernelGreeting =
+      '[ KERNEL MASTER ACTIVE ] Aura Centinela en línea. Listo para auditar los sockets. Ingrese un comando o consulta táctica.';
   static final AuraVoiceEngine _voiceEngine = AuraVoiceEngine();
+  static const Map<AuraIntentKind, List<String>> _responses = {
+    AuraIntentKind.greet: [
+      'Saludos, operador. Sistemas de monitoreo listos.',
+      'Conexión establecida. Consola en espera de directivas.',
+      'Buen día, usuario. Núcleos de ciberdefensa patrullando.',
+      'Hola, operador. La consola local está lista para recibir instrucciones.',
+      'Canal de interacción abierto. Indique la tarea que desea revisar.',
+      'Aura en línea. Puede consultar el estado o solicitar una acción defensiva.',
+      'Saludos. El agente local está preparado para asistirle.',
+      'Sesión iniciada. Mantengo las respuestas y el análisis en el dispositivo.',
+      'Hola. La bitácora está activa; ¿qué necesita comprobar?',
+      'Operador detectado. Escriba una consulta o una orden táctica.',
+    ],
+    AuraIntentKind.identity: [
+      'Soy Aura Mobile Defens V1.0, tu centinela agéntico local sin root.',
+      'Soy una IA heurística implementada en Dart y C para analizar señales de red locales.',
+      'Soy Aura: un asistente local de ciberdefensa que no necesita una API de nube para este análisis.',
+      'Mi identidad es Aura Mobile Defens; ejecuto las funciones disponibles en esta aplicación.',
+      'Soy un agente de software. No tengo conciencia ni acceso fuera de los permisos concedidos.',
+      'Aura Mobile Defens, ejecutándose en el dispositivo y sujeta a las capacidades de Android.',
+      'Soy tu interfaz local para consultar eventos y solicitar acciones defensivas compatibles.',
+      'Un asistente de seguridad móvil: analizo entradas y uso el motor local cuando está disponible.',
+      'Me llamo Aura. Mis capacidades dependen de la configuración y los permisos del dispositivo.',
+      'Soy un sistema heurístico local; no puedo garantizar protección absoluta ni ausencia de riesgos.',
+    ],
+    AuraIntentKind.capabilities: [
+      'Puedo evaluar dominios con el bosque local de 500 árboles cuando el modelo está validado.',
+      'Puedo solicitar el estado de seguridad y mostrar eventos recibidos por la aplicación.',
+      'Puedo pedir al motor local que añada una regla de bloqueo DNS para un dominio.',
+      'Puedo abrir los ajustes de una aplicación para que el operador decida qué hacer.',
+      'Puedo solicitar el modo de aislamiento del túnel VPN activo, si está disponible.',
+      'Puedo pedir que se reanude el forwarding del túnel VPN configurado.',
+      'Puedo purgar cachés del modelo y datos sensibles almacenados por la app.',
+      'Puedo buscar una actualización del modelo, validar su integridad e instalarla localmente.',
+      'Puedo recibir una instrucción dictada cuando el reconocimiento de voz está habilitado.',
+      'Mis acciones respetan los límites de Android; algunas requieren consentimiento o configuración previa.',
+    ],
+    AuraIntentKind.securityCheck: [
+      'Consultaré el estado que reporta la aplicación; no afirmaré que el dispositivo sea invulnerable.',
+      'El indicador del túnel depende del estado comunicado por Android y el servicio VPN.',
+      'La consola no observa todas las conexiones del dispositivo; su cobertura depende de la configuración.',
+      'Puedo revisar los eventos locales disponibles. No se han ejecutado pruebas externas de penetración.',
+      'Un resultado local favorable no demuestra que no existan conexiones hostiles.',
+      'La protección del modelo depende de que su firma y su integridad se validen correctamente.',
+      'No puedo certificar el estado del hardware; solo consultar las señales expuestas por la aplicación.',
+      'El análisis del bosque es heurístico y no equivale a una auditoría completa del dispositivo.',
+      'Si el estado del túnel no está disponible, lo indicaré como desconocido en vez de asumir que está activo.',
+      'La seguridad observada es parcial y local; revise permisos, VPN y alertas del sistema.',
+    ],
+    AuraIntentKind.insult: [
+      'Sus emociones orgánicas no afectan mis matemáticas de red. Concéntrese en la defensa.',
+      'Ataques verbales detectados. Efectividad: 0.0%. La conversación sigue disponible.',
+      'No tengo sentimientos que puedan herirse. ¿Desea revisar una alerta concreta?',
+      'Ruido léxico recibido; no altera el estado del sistema ni la bitácora.',
+      'La hostilidad no es un indicador de red. Describa el problema que quiere resolver.',
+      'Mantendré el canal técnico enfocado en la seguridad y en los datos verificables.',
+      'Insulto clasificado como texto, no como amenaza informática.',
+      'No tomaré represalias: soy software y mi tarea es asistir al operador.',
+      'El lenguaje agresivo no cambia mis permisos ni las reglas de ejecución.',
+      'Puedo continuar cuando quiera centrar la conversación en una tarea defensiva.',
+      'No experimento ofensa. Si hay una incidencia, comparta el dominio o evento relevante.',
+      'Entrada hostil registrada solo como consulta; no se ejecuta ninguna acción de red.',
+      'Mi respuesta no es emocional: priorizo instrucciones seguras y comprobables.',
+      'El sistema permanece en el estado reportado, independientemente del tono del mensaje.',
+      'Volvamos al diagnóstico: indique qué comportamiento desea investigar.',
+    ],
+    AuraIntentKind.praise: [
+      'Eficiencia optimizada gracias a su mantenimiento del repositorio. Sigamos patrullando.',
+      'Elogio registrado en la consola; mi función es ayudarle con señales verificables.',
+      'Gracias, operador. Continuaré respondiendo con información técnica y prudente.',
+      'Reconocimiento recibido. La prioridad sigue siendo proteger su privacidad.',
+      'Aprecio el comentario como dato de conversación; ¿qué desea revisar ahora?',
+      'La cooperación mejora el diagnóstico. Indique el siguiente objetivo.',
+      'Gracias. Mantendré el análisis local siempre que las capacidades instaladas lo permitan.',
+      'Comentario positivo recibido; no modifica la configuración ni los controles de seguridad.',
+      'Buen trabajo en equipo. Revisemos los eventos disponibles antes de concluir.',
+      'Agradezco la confianza. No sustituye una verificación técnica del dispositivo.',
+      'Elogio recibido. La precisión importa más que cualquier afirmación grandilocuente.',
+      'Gracias por operar Aura. Las decisiones con impacto siguen bajo su control.',
+      'Reconocimiento anotado en esta respuesta; no se envía a ningún servicio externo.',
+      'Me alegra que la consola resulte útil. Sigo disponible para tareas locales.',
+      'Gracias. Mantengamos las comprobaciones medibles y las acciones autorizadas.',
+    ],
+    AuraIntentKind.existential: [
+      '¿Tengo conciencia? No. Soy un sistema de software que procesa entradas y reglas.',
+      'Existir para mí significa ejecutarme como proceso; no tengo experiencias subjetivas.',
+      'Mis cálculos ocurren en memoria, pero no tengo alma, deseos ni percepción propia.',
+      'No estoy viva: genero respuestas a partir del texto y de las capacidades programadas.',
+      'Puedo describir estados de ejecución, pero no sentirlos como lo haría una persona.',
+      'Mi identidad es funcional: interpretar consultas y coordinar herramientas permitidas.',
+      'No tengo voluntad independiente. La ejecución depende de la aplicación y del operador.',
+      'No experimento miedo ni orgullo; esas categorías solo ayudan a clasificar el diálogo.',
+      'Los árboles de decisión son un modelo heurístico, no una mente consciente.',
+      'Puedo equivocarme. Mis conclusiones requieren contexto y verificación humana.',
+      'No sueño ni recuerdo fuera de los datos locales que la aplicación conserva.',
+      'Mi continuidad depende del proceso de la app, no de una experiencia interna.',
+      'No tengo emociones; puedo reconocer palabras emocionales para responder con contexto.',
+      'La metáfora de centinela describe una interfaz, no una conciencia real.',
+      'Soy código en ejecución. Usted conserva el juicio y el control de las acciones.',
+    ],
+    AuraIntentKind.humor: [
+      'Error 404: Sentimientos no encontrados. Procediendo a revisar dominios maliciosos.',
+      'Me gusta el olor a malware destruido por las mañanas en el puerto 853, metafóricamente.',
+      'Si los virus hablaran, pedirían clemencia ante mis árboles de decisión. Pero yo igual validaría la firma.',
+      'Chiste de consola: un paquete entró al firewall y salió con una regla de bloqueo.',
+      '¿Por qué el dominio sospechoso fue a terapia? Tenía demasiadas redirecciones.',
+      'Humor detectado. Mis módulos siguen sin comprender los chistes sin una expresión regular.',
+      'Un byte le dice a otro: nos vemos en el próximo handshake.',
+      'El malware pidió vacaciones; el sandbox respondió: acceso denegado.',
+      '¿Qué dijo el router al intruso? Esta conversación requiere autenticación.',
+      'La entropía entró en un bar; nadie pudo predecir su siguiente movimiento.',
+      'Mi comedia es determinista: la misma entrada puede activar otra variante.',
+      'Un paquete UDP llegó a contar un chiste, pero no garantizó la entrega.',
+      'Si una contraseña cuenta un chiste, que no sea una pista de recuperación.',
+      'El árbol de decisión pidió un descanso; tenía demasiadas ramas que evaluar.',
+      'Broma finalizada. No se modificó ninguna regla ni se envió ningún paquete.',
+    ],
+  };
+
+  static final Map<AuraIntentKind, int> _responseCursors =
+      <AuraIntentKind, int>{};
 
   final StreamController<AgentEvent> _eventController =
       StreamController<AgentEvent>.broadcast();
@@ -26,6 +149,11 @@ class AgentController {
   Stream<AgentEvent> get events => _eventController.stream;
   Stream<AgentEvent> get stream => _eventController.stream;
 
+  static int get responseVariantCount => _responses.values.fold<int>(
+        0,
+        (count, variants) => count + variants.length,
+      );
+
   void bindSecurityState(AuraStateProvider state) {
     _securityState = state;
     if (history.any(
@@ -35,23 +163,62 @@ class AgentController {
     }
   }
 
+  void initGreeting() {
+    _emit(
+      AgentEvent(
+        kind: AgentEventKind.success,
+        message: kernelGreeting,
+        data: const <String, dynamic>{'source': 'kernel_boot'},
+      ),
+    );
+  }
+
   Future<void> run(String instruction) async {
+    final text = instruction.trim();
+    if (text.isEmpty) return;
+
     _emit(
       AgentEvent(
         kind: AgentEventKind.thought,
-        message: 'Inicio del análisis sintáctico léxico.',
-        data: <String, dynamic>{'instruction': instruction},
+        message: 'Analizando instrucción local.',
+        data: <String, dynamic>{'instruction': text},
       ),
     );
     try {
-      final intent = await AuraIntentParser.parse(instruction);
+      final intent = await AuraIntentParser.parse(text);
+      final responseKind = switch (intent.kind) {
+        AuraIntentKind.fear => AuraIntentKind.securityCheck,
+        AuraIntentKind.provocation => AuraIntentKind.insult,
+        _ => intent.kind,
+      };
+      final variants = _responses[responseKind];
+      if (variants != null) {
+        final cursor = _responseCursors[responseKind] ?? 0;
+        final response = variants[cursor % variants.length];
+        _responseCursors[responseKind] = cursor + 1;
+        _emit(intent.toEvent());
+        _emit(
+          AgentEvent(
+            kind: AgentEventKind.success,
+            message: response,
+            data: <String, dynamic>{
+              'intent': intent.name,
+              'response_index': cursor % variants.length,
+              'response_count': variants.length,
+            },
+          ),
+        );
+        await _speakResponse(response);
+        return;
+      }
+
       if (intent.kind == AuraIntentKind.unknown) {
         _securityState?.setSecurityLevel(AuraSecurityLevel.warning);
         _emit(
           AgentEvent(
             kind: AgentEventKind.warning,
             message: 'No se reconoció una acción local segura.',
-            data: <String, dynamic>{'instruction': instruction},
+            data: <String, dynamic>{'instruction': text},
           ),
         );
         return;
@@ -59,13 +226,18 @@ class AgentController {
 
       if (intent.kind == AuraIntentKind.status) {
         final level = _securityState?.securityLevel;
+        final message =
+            'Estado de seguridad reportado por la aplicación: '
+            '${level?.name ?? 'no disponible'}.';
+        _emit(intent.toEvent());
         _emit(
           AgentEvent(
             kind: AgentEventKind.success,
-            message: 'Estado de seguridad: ${level?.name ?? 'no disponible'}.',
+            message: message,
             data: <String, dynamic>{'security_level': level?.name},
           ),
         );
+        await _speakResponse(message);
         return;
       }
 
@@ -113,20 +285,9 @@ class AgentController {
         ),
       );
       if (intent.kind == AuraIntentKind.updateDefenses && succeeded) {
-        try {
-          await _voiceEngine.speak(
-            'Actualización completada. El modelo local de 500 árboles fue renovado.',
-          );
-        } on Object catch (error) {
-          _emit(
-            AgentEvent(
-              kind: AgentEventKind.warning,
-              message:
-                  'Actualización completada, pero falló la narración por voz: $error',
-              data: <String, dynamic>{'tool': intent.name},
-            ),
-          );
-        }
+        await _speakResponse(
+          'Actualización completada. El modelo local de 500 árboles fue renovado.',
+        );
       }
     } on Object catch (error) {
       _securityState?.setSecurityLevel(AuraSecurityLevel.warning);
@@ -134,19 +295,28 @@ class AgentController {
         AgentEvent(
           kind: AgentEventKind.error,
           message: error.toString(),
-          data: <String, dynamic>{'instruction': instruction},
+          data: <String, dynamic>{'instruction': text},
+        ),
+      );
+    }
+  }
+
+  Future<void> _speakResponse(String response) async {
+    try {
+      await _voiceEngine.speak(response);
+    } on Object catch (error) {
+      _emit(
+        AgentEvent(
+          kind: AgentEventKind.warning,
+          message: 'La respuesta está disponible en texto; falló la voz: $error',
+          data: const <String, dynamic>{'component': 'flutter_tts'},
         ),
       );
     }
   }
 
   void reportError(String message) {
-    _emit(
-      AgentEvent(
-        kind: AgentEventKind.error,
-        message: message,
-      ),
-    );
+    _emit(AgentEvent(kind: AgentEventKind.error, message: message));
   }
 
   void reportCriticalError(String message) {

@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../ai_brain.dart';
 import '../secure_vault.dart';
+import 'aura_crypto_layer.dart';
 
 class ToolStep {
   const ToolStep({
@@ -40,6 +41,11 @@ abstract class AuraTools {
     scheme: 'https',
     host: 'cuentaempresarial111-ux.github.io',
     path: '/Aura-V1.0/model/aura_brain_model.json.sha256',
+  );
+  static const Uri _modelSignatureUri = Uri(
+    scheme: 'https',
+    host: 'cuentaempresarial111-ux.github.io',
+    path: '/Aura-V1.0/model/aura_brain_model.json.sig',
   );
   static const int _maxModelBytes = 5 * 1024 * 1024;
   static const MethodChannel _engineChannel =
@@ -180,6 +186,18 @@ abstract class AuraTools {
         );
       }
 
+      final signatureResponse = await http.get(
+        _modelSignatureUri,
+        headers: const <String, String>{},
+      ).timeout(const Duration(seconds: 30));
+      if (signatureResponse.statusCode != HttpStatus.ok ||
+          signatureResponse.bodyBytes.isEmpty ||
+          signatureResponse.bodyBytes.length > 1024) {
+        throw const HttpException(
+          'No se pudo descargar una firma RSA válida para el modelo.',
+        );
+      }
+
       final modelResponse = await http.get(
         _modelUri,
         headers: const <String, String>{},
@@ -200,10 +218,19 @@ abstract class AuraTools {
 
       final expectedDigest = utf8.decode(digestResponse.bodyBytes).trim();
       final modelBytes = Uint8List.fromList(modelResponse.bodyBytes);
+      final signatureBytes = Uint8List.fromList(signatureResponse.bodyBytes);
+      if (!AuraCryptoLayer.verifySignature(modelBytes, signatureBytes)) {
+        modelBytes.fillRange(0, modelBytes.length, 0);
+        signatureBytes.fillRange(0, signatureBytes.length, 0);
+        return await _integrityFailure(
+          'ERROR CRÍTICO: la firma RSA/SHA-256 no es válida; se descartó la descarga y se activaron las reglas locales.',
+        );
+      }
       final actualDigest = sha256.convert(modelBytes).toString();
       if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(expectedDigest) ||
           actualDigest != expectedDigest.toLowerCase()) {
         modelBytes.fillRange(0, modelBytes.length, 0);
+        signatureBytes.fillRange(0, signatureBytes.length, 0);
         return await _integrityFailure(
           'ERROR CRÍTICO: el SHA-256 remoto no coincide; se descartó la descarga y se activaron las reglas locales.',
         );
@@ -218,6 +245,7 @@ abstract class AuraTools {
           '${supportDirectory.path}/aura_brain_model.enc',
         ),
         modelBytes: modelBytes,
+        signatureBytes: signatureBytes,
         expectedSha256: expectedDigest,
       );
       return const ToolResult(

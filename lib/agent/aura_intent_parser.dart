@@ -7,6 +7,16 @@ enum AuraIntentKind {
   resumeNetwork,
   cryptographicPurge,
   updateDefenses,
+  greet,
+  identity,
+  capabilities,
+  securityCheck,
+  insult,
+  praise,
+  existential,
+  fear,
+  provocation,
+  humor,
   status,
   unknown,
 }
@@ -32,6 +42,16 @@ class AuraIntent {
           AuraIntentKind.resumeNetwork ||
           AuraIntentKind.cryptographicPurge ||
           AuraIntentKind.updateDefenses => AgentEventKind.action,
+          AuraIntentKind.greet ||
+          AuraIntentKind.identity ||
+          AuraIntentKind.capabilities ||
+          AuraIntentKind.securityCheck ||
+          AuraIntentKind.insult ||
+          AuraIntentKind.praise ||
+          AuraIntentKind.existential ||
+          AuraIntentKind.fear ||
+          AuraIntentKind.provocation ||
+          AuraIntentKind.humor => AgentEventKind.thought,
           AuraIntentKind.status => AgentEventKind.thought,
           AuraIntentKind.unknown => AgentEventKind.warning,
         },
@@ -80,6 +100,98 @@ class AuraIntentParser {
     r'\b(?:actualizar sistema de defensas|actualizar|update defenses|update)\b',
     caseSensitive: false,
   );
+  static const Map<AuraIntentKind, List<String>> _conversationTokens = {
+    AuraIntentKind.greet: [
+      'hola',
+      'buenos dias',
+      'buenas tardes',
+      'buenas noches',
+      'saludos',
+      'hey aura',
+      'buen dia',
+    ],
+    AuraIntentKind.identity: [
+      'quien eres',
+      'quien sos',
+      'tu nombre',
+      'como te llamas',
+      'que eres',
+      'identidad',
+    ],
+    AuraIntentKind.capabilities: [
+      'que puedes hacer',
+      'capacidades',
+      'funciones',
+      'que sabes hacer',
+      'como me ayudas',
+      'herramientas',
+    ],
+    AuraIntentKind.securityCheck: [
+      'estado de seguridad',
+      'estoy seguro',
+      'estoy protegido',
+      'estoy protegida',
+      'revisa mi seguridad',
+      'como esta el sistema',
+      'salud del sistema',
+    ],
+    AuraIntentKind.insult: [
+      'inutil',
+      'idiota',
+      'estupida',
+      'estupido',
+      'mala ia',
+      'no sirves',
+    ],
+    AuraIntentKind.praise: [
+      'bien hecho',
+      'excelente',
+      'gran trabajo',
+      'eres genial',
+      'te felicito',
+      'gracias aura',
+    ],
+    AuraIntentKind.existential: [
+      'tienes conciencia',
+      'estas viva',
+      'sientes',
+      'tienes alma',
+      'que significa existir',
+      'piensas por ti misma',
+    ],
+    AuraIntentKind.fear: [
+      'tengo miedo',
+      'estoy asustado',
+      'estoy asustada',
+      'me preocupa',
+      'estoy nervioso',
+      'estoy nerviosa',
+      'hay peligro',
+    ],
+    AuraIntentKind.provocation: [
+      'te reto',
+      'te desafio',
+      'no puedes',
+      'a que no',
+      'demuestra lo que vales',
+      'te voy a hackear',
+    ],
+    AuraIntentKind.humor: [
+      'cuentame un chiste',
+      'hazme reir',
+      'algo gracioso',
+      'tienes humor',
+      'chiste',
+      'broma',
+    ],
+  };
+  static final Map<AuraIntentKind, RegExp> _conversationPatterns = {
+    for (final entry in _conversationTokens.entries)
+      entry.key: RegExp(
+        '\\b(?:${entry.value.map(RegExp.escape).join('|')})\\b',
+        caseSensitive: false,
+      ),
+  };
   static final RegExp _ipv4Pattern = RegExp(r'\b(?:\d{1,3}\.){3}\d{1,3}\b');
   static final RegExp _hostPattern = RegExp(
     r'\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b',
@@ -172,17 +284,59 @@ class AuraIntentParser {
         confidence: 0.88,
       );
     } else {
-      intent = AuraIntent(
-        name: 'unknown',
-        kind: AuraIntentKind.unknown,
-        entities: <String, dynamic>{},
-        confidence: 0.0,
-      );
+      final conversationKind = _classifyConversation(text);
+      intent = conversationKind == null
+          ? AuraIntent(
+              name: 'unknown',
+              kind: AuraIntentKind.unknown,
+              entities: <String, dynamic>{},
+              confidence: 0.0,
+            )
+          : AuraIntent(
+              name: _intentName(conversationKind),
+              kind: conversationKind,
+              entities: <String, dynamic>{},
+              confidence: 0.9,
+            );
     }
 
     _remember(intent);
     return Future<AuraIntent>.value(intent);
   }
+
+  static AuraIntentKind? _classifyConversation(String text) {
+    final normalized = text
+        .toLowerCase()
+        .replaceAll(RegExp(r'[áàä]'), 'a')
+        .replaceAll(RegExp(r'[éèë]'), 'e')
+        .replaceAll(RegExp(r'[íìï]'), 'i')
+        .replaceAll(RegExp(r'[óòö]'), 'o')
+        .replaceAll(RegExp(r'[úùü]'), 'u');
+    final matches = <AuraIntentKind, int>{};
+    for (final entry in _conversationPatterns.entries) {
+      final tokenMatches = entry.value.allMatches(normalized).length;
+      if (tokenMatches > 0) matches[entry.key] = tokenMatches;
+    }
+    if (matches.isEmpty) return null;
+    return matches.entries.reduce(
+      (best, candidate) =>
+          candidate.value > best.value ? candidate : best,
+    ).key;
+  }
+
+  static String _intentName(AuraIntentKind kind) => switch (kind) {
+        AuraIntentKind.greet => 'greet',
+        AuraIntentKind.identity => 'identity',
+        AuraIntentKind.capabilities => 'capabilities',
+        AuraIntentKind.securityCheck => 'security_check',
+        AuraIntentKind.insult => 'insult',
+        AuraIntentKind.praise => 'praise',
+        AuraIntentKind.existential => 'existential',
+        AuraIntentKind.fear => 'fear',
+        AuraIntentKind.provocation => 'provocation',
+        AuraIntentKind.humor => 'humor',
+        _ => 'unknown',
+      };
 
   static String? _extractHost(String text) {
     for (final match in _ipv4Pattern.allMatches(text)) {

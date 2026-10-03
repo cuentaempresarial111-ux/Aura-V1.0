@@ -175,20 +175,33 @@ class AuraAIBrain {
       '${supportDirectory.path}/$_installedModelFileName',
     );
     final installedDigest = File('${installedModel.path}.sha256');
+    final installedSignature = File('${installedModel.path}.sig');
     if (await installedModel.exists()) await installedModel.delete();
     if (await installedDigest.exists()) await installedDigest.delete();
+    if (await installedSignature.exists()) await installedSignature.delete();
     _forceRuleFallback = false;
   }
 
   static Future<void> installDownloadedModel({
     required File destination,
     required Uint8List modelBytes,
+    required Uint8List signatureBytes,
     required String expectedSha256,
   }) async {
+    if (!AuraCryptoLayer.verifySignature(modelBytes, signatureBytes)) {
+      modelBytes.fillRange(0, modelBytes.length, 0);
+      signatureBytes.fillRange(0, signatureBytes.length, 0);
+      await useSafeRuleFallback(
+        'La firma RSA/SHA-256 del modelo remoto no es válida.',
+        notifyHud: false,
+      );
+      throw const FormatException('La firma RSA del modelo no es válida.');
+    }
     final actualDigest = sha256.convert(modelBytes).toString();
     if (!_isSha256(expectedSha256) ||
         actualDigest != expectedSha256.toLowerCase()) {
       modelBytes.fillRange(0, modelBytes.length, 0);
+      signatureBytes.fillRange(0, signatureBytes.length, 0);
       await useSafeRuleFallback(
         'Digest incorrecto para el modelo remoto; se descartó el buffer descargado.',
         notifyHud: false,
@@ -212,7 +225,12 @@ class AuraAIBrain {
       );
       final encryptedBytes = Uint8List.fromList(utf8.encode(encryptedHex));
       final localDigest = sha256.convert(encryptedBytes).toString();
-      await _writeModelPair(destination, encryptedBytes, localDigest);
+      await _writeModelPair(
+        destination,
+        encryptedBytes,
+        localDigest,
+        signatureBytes,
+      );
       _forceRuleFallback = false;
       for (final brain in brains) {
         _clearModelValue(brain._modelCache);
@@ -224,6 +242,7 @@ class AuraAIBrain {
     } finally {
       if (decoded != null) _clearModelValue(decoded);
       modelBytes.fillRange(0, modelBytes.length, 0);
+      signatureBytes.fillRange(0, signatureBytes.length, 0);
     }
   }
 
@@ -297,22 +316,29 @@ class AuraAIBrain {
     File destination,
     Uint8List encryptedBytes,
     String digest,
+    Uint8List signatureBytes,
   ) async {
     await destination.parent.create(recursive: true);
     final digestFile = File('${destination.path}.sha256');
+    final signatureFile = File('${destination.path}.sig');
     final modelTemporary = File('${destination.path}.tmp');
     final digestTemporary = File('${digestFile.path}.tmp');
+    final signatureTemporary = File('${signatureFile.path}.tmp');
     try {
       await modelTemporary.writeAsBytes(encryptedBytes, flush: true);
       await digestTemporary.writeAsString(digest, flush: true);
+      await signatureTemporary.writeAsBytes(signatureBytes, flush: true);
       await modelTemporary.rename(destination.path);
       await digestTemporary.rename(digestFile.path);
+      await signatureTemporary.rename(signatureFile.path);
     } on Object {
       if (await modelTemporary.exists()) await modelTemporary.delete();
       if (await digestTemporary.exists()) await digestTemporary.delete();
+      if (await signatureTemporary.exists()) await signatureTemporary.delete();
       rethrow;
     } finally {
       encryptedBytes.fillRange(0, encryptedBytes.length, 0);
+      signatureBytes.fillRange(0, signatureBytes.length, 0);
     }
   }
 
@@ -443,6 +469,7 @@ class AuraAIBrain {
         '${supportDirectory.path}/$_installedModelFileName',
       );
       final installedDigest = File('${installedModel.path}.sha256');
+      final installedSignature = File('${installedModel.path}.sig');
       final secureKey = await _secureVault.getOrCreateModelMasterKey();
       if (await installedModel.exists()) {
         artifactBytes = await installedModel.readAsBytes();
@@ -464,9 +491,36 @@ class AuraAIBrain {
             'El SHA-256 del modelo cifrado local no coincide.',
           );
         }
-        decoded = _decodeAndValidateModel(
-          AuraCryptoLayer.decryptModel(utf8.decode(artifactBytes), secureKey),
+        final plaintext = AuraCryptoLayer.decryptModel(
+          utf8.decode(artifactBytes),
+          secureKey,
         );
+        final plaintextBytes = Uint8List.fromList(
+          utf8.encode(plaintext),
+        );
+        try {
+          if (!await installedSignature.exists()) {
+            throw const FormatException(
+              'Falta la firma RSA del modelo instalado.',
+            );
+          }
+          final signatureBytes = await installedSignature.readAsBytes();
+          try {
+            if (!AuraCryptoLayer.verifySignature(
+              plaintextBytes,
+              signatureBytes,
+            )) {
+              throw const FormatException(
+                'La firma RSA del modelo instalado no es válida.',
+              );
+            }
+          } finally {
+            signatureBytes.fillRange(0, signatureBytes.length, 0);
+          }
+        } finally {
+          plaintextBytes.fillRange(0, plaintextBytes.length, 0);
+        }
+        decoded = _decodeAndValidateModel(plaintext);
       } else {
         final sourceData = await rootBundle.load(_modelAssetPath);
         artifactBytes = Uint8List.fromList(
@@ -490,16 +544,6 @@ class AuraAIBrain {
           );
         }
         decoded = _decodeAndValidateModel(utf8.decode(artifactBytes));
-        final encryptedHex = AuraCryptoLayer.encryptModel(
-          utf8.decode(artifactBytes),
-          secureKey,
-        );
-        final encryptedBytes = Uint8List.fromList(utf8.encode(encryptedHex));
-        await _writeModelPair(
-          installedModel,
-          encryptedBytes,
-          sha256.convert(encryptedBytes).toString(),
-        );
       }
       return decoded;
     } on Object catch (error) {

@@ -20,10 +20,13 @@ build/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
+__pycache__/
+*.py[cod]
 android/.gradle/
 android/local.properties
 
 # Android signing material and local signing configuration
+/tool/private_key.pem
 *.jks
 *.keystore
 *.keystores
