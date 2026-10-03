@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 
+import '../agent/agent_controller.dart';
 import '../ai_brain.dart';
 import '../secure_vault.dart';
 import '../theme/aura_tokens.dart';
@@ -30,6 +31,9 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   void initState() {
     super.initState();
+    AuraAIBrain.onModelIntegrityFailure = (message) {
+      AgentController.instance.reportCriticalError(message);
+    };
     _secureVault = AuraSecureVault();
     _aiBrain = AuraAIBrain(secureVault: _secureVault);
     _animationController = AnimationController(
@@ -100,11 +104,13 @@ class _SplashScreenState extends State<SplashScreen>
         _loadingProgress = 0.55;
         _bootStatusText = 'DESCIFRANDO MODELO AES-256...';
       });
-      await _aiBrain.preloadModel();
+      final modelReady = await _aiBrain.preloadModel();
       if (!mounted) return;
       setState(() {
         _loadingProgress = 0.85;
-        _bootStatusText = 'BOSQUE LOCAL VALIDADO: 500 ÁRBOLES.';
+        _bootStatusText = modelReady
+            ? 'BOSQUE LOCAL VALIDADO: 500 ÁRBOLES.'
+            : 'MODELO NO VERIFICADO; REGLAS LOCALES ACTIVAS.';
       });
       await Future<void>.delayed(const Duration(milliseconds: 350));
       if (!mounted) return;

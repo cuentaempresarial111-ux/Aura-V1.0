@@ -1,4 +1,4 @@
-name: Deploy encrypted model to GitHub Pages
+name: Deploy model to GitHub Pages
 
 on:
   push:
@@ -6,8 +6,8 @@ on:
       - main
     paths:
       - '.github/workflows/deploy-model-pages.yml'
-      - 'assets/model/aura_brain_model.enc'
-      - 'assets/model/aura_brain_model.sha256'
+      - 'assets/model/aura_brain_model.json'
+      - 'assets/model/aura_brain_model.json.sha256'
   workflow_dispatch:
 
 permissions:
@@ -31,8 +31,8 @@ jobs:
       - name: Prepare model-only site
         run: |
           mkdir -p _site/model
-          cp assets/model/aura_brain_model.enc _site/model/
-          cp assets/model/aura_brain_model.sha256 _site/model/
+          cp assets/model/aura_brain_model.json _site/model/
+          cp assets/model/aura_brain_model.json.sha256 _site/model/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

@@ -1,7 +1,6 @@
 import argparse
 import csv
 import hashlib
-import hmac
 import json
 import math
 import os
@@ -11,8 +10,6 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import numpy as np
-from cryptography.hazmat.primitives import padding
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.tree import _tree
 
@@ -150,37 +147,6 @@ def read_csv_samples(csv_files, max_rows):
     return samples
 
 
-def read_dart_string_constant(source_path, name):
-    source = source_path.read_text(encoding="utf-8")
-    match = re.search(
-        rf"static\s+const\s+String\s+{re.escape(name)}\s*=\s*'([^']*)'",
-        source,
-    )
-    if match is None:
-        raise RuntimeError(f"No se encontró la constante {name} en {source_path}.")
-    return match.group(1)
-
-
-def derive_model_key(master_key):
-    crypto_source = ROOT / "lib/agent/aura_crypto_layer.dart"
-    salt = read_dart_string_constant(crypto_source, "_derivationSalt").encode("utf-8")
-    info = read_dart_string_constant(crypto_source, "_derivationInfo").encode("utf-8")
-    pseudo_random_key = hmac.new(salt, master_key.encode("utf-8"), hashlib.sha256).digest()
-    return hmac.new(pseudo_random_key, info + b"\x01", hashlib.sha256).digest()
-
-
-def encrypt_model(plaintext):
-    vault_source = ROOT / "lib/secure_vault.dart"
-    master_key = read_dart_string_constant(vault_source, "defaultModelMasterKey")
-    key = derive_model_key(master_key)
-    iv = os.urandom(16)
-    padder = padding.PKCS7(algorithms.AES.block_size).padder()
-    padded_plaintext = padder.update(plaintext) + padder.finalize()
-    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
-    ciphertext = encryptor.update(padded_plaintext) + encryptor.finalize()
-    return (iv + ciphertext).hex()
-
-
 def serialize_tree(estimator):
     tree = estimator.tree_
 
@@ -212,7 +178,7 @@ def atomic_write(path, content):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Entrena y cifra el bosque local de Aura.")
+    parser = argparse.ArgumentParser(description="Entrena el bosque local de Aura.")
     parser.add_argument(
         "--dataset-root",
         type=Path,
@@ -271,10 +237,13 @@ def main():
         raise RuntimeError("El bosque serializado no contiene exactamente 500 árboles.")
 
     json_bytes = (json.dumps(model, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-    encrypted_hex = encrypt_model(json_bytes)
     atomic_write(ROOT / "assets/model/aura_brain_model.json", json_bytes.decode("utf-8"))
-    atomic_write(ROOT / "assets/model/aura_brain_model.enc", encrypted_hex + "\n")
-    print("Modelo JSON y artefacto AES-CBC generados; se serializaron 500 árboles.")
+    digest = hashlib.sha256(json_bytes).hexdigest()
+    atomic_write(
+        ROOT / "assets/model/aura_brain_model.json.sha256",
+        digest + "\n",
+    )
+    print("Modelo JSON y digest SHA-256 generados; se serializaron 500 árboles.")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
@@ -33,13 +34,14 @@ abstract class AuraTools {
   static const Uri _modelUri = Uri(
     scheme: 'https',
     host: 'cuentaempresarial111-ux.github.io',
-    path: '/Aura-V1.0/model/aura_brain_model.enc',
+    path: '/Aura-V1.0/model/aura_brain_model.json',
   );
   static const Uri _modelDigestUri = Uri(
     scheme: 'https',
     host: 'cuentaempresarial111-ux.github.io',
-    path: '/Aura-V1.0/model/aura_brain_model.sha256',
+    path: '/Aura-V1.0/model/aura_brain_model.json.sha256',
   );
+  static const int _maxModelBytes = 5 * 1024 * 1024;
   static const MethodChannel _engineChannel =
       MethodChannel('com.aura.cyberdefense/engine');
   static final AuraSecureVault _secureVault = AuraSecureVault();
@@ -164,61 +166,96 @@ abstract class AuraTools {
   static Future<ToolResult> _updateDefenses(
     void Function(String message)? onProgress,
   ) async {
-    onProgress?.call('Estableciendo conexión descentralizada anónima... 📡');
-    onProgress?.call('Buscando firmas actualizadas en la red... 🔍');
-    final digestResponse = await http.get(
-      _modelDigestUri,
-      headers: const <String, String>{},
-    );
-    if (digestResponse.statusCode != HttpStatus.ok) {
-      throw HttpException(
-        'La firma publicada del modelo no responde correctamente.',
+    try {
+      onProgress?.call('Estableciendo conexión HTTPS al repositorio público... 📡');
+      onProgress?.call('Buscando el digest SHA-256 publicado... 🔍');
+      final digestResponse = await http.get(
+        _modelDigestUri,
+        headers: const <String, String>{},
+      ).timeout(const Duration(seconds: 30));
+      if (digestResponse.statusCode != HttpStatus.ok ||
+          digestResponse.bodyBytes.length > 128) {
+        throw const HttpException(
+          'No se pudo descargar una verificación SHA-256 válida.',
+        );
+      }
+
+      final modelResponse = await http.get(
+        _modelUri,
+        headers: const <String, String>{},
+      ).timeout(const Duration(seconds: 30));
+      if (modelResponse.statusCode != HttpStatus.ok ||
+          modelResponse.bodyBytes.isEmpty ||
+          modelResponse.bodyBytes.length > _maxModelBytes) {
+        modelResponse.bodyBytes.fillRange(
+          0,
+          modelResponse.bodyBytes.length,
+          0,
+        );
+        throw const HttpException(
+          'El modelo público está vacío, excede el tamaño permitido o no está disponible.',
+        );
+      }
+      onProgress?.call('Descargando matriz de 500 árboles... 📥');
+
+      final expectedDigest = utf8.decode(digestResponse.bodyBytes).trim();
+      final modelBytes = Uint8List.fromList(modelResponse.bodyBytes);
+      final actualDigest = sha256.convert(modelBytes).toString();
+      if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(expectedDigest) ||
+          actualDigest != expectedDigest.toLowerCase()) {
+        modelBytes.fillRange(0, modelBytes.length, 0);
+        return await _integrityFailure(
+          'ERROR CRÍTICO: el SHA-256 remoto no coincide; se descartó la descarga y se activaron las reglas locales.',
+        );
+      }
+
+      onProgress?.call(
+        'Verificando el modelo y cifrándolo con la clave aleatoria del dispositivo... 🧠',
       );
-    }
-    final modelResponse = await http.get(
-      _modelUri,
-      headers: const <String, String>{},
-    );
-    onProgress?.call('Descargando matriz de 500 árboles sin dejar rastro... 📥');
-    if (modelResponse.statusCode != HttpStatus.ok) {
-      throw HttpException(
-        'La descarga del modelo actualizado fue rechazada por el host público.',
+      final supportDirectory = await getApplicationSupportDirectory();
+      await AuraAIBrain.installDownloadedModel(
+        destination: File(
+          '${supportDirectory.path}/aura_brain_model.enc',
+        ),
+        modelBytes: modelBytes,
+        expectedSha256: expectedDigest,
       );
-    }
-    final expectedDigest = digestResponse.body.trim();
-    final actualDigest = sha256.convert(modelResponse.bodyBytes).toString();
-    if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(expectedDigest) ||
-        actualDigest.toLowerCase() != expectedDigest.toLowerCase()) {
       return const ToolResult(
         summary:
-            'ERROR CRÍTICO: el SHA-256 del archivo descargado no coincide con la firma publicada; la actualización se aborta sin reemplazar el modelo local.',
+            'Modelo de 500 árboles verificado, cifrado con la clave del dispositivo e instalado.',
         data: <String, dynamic>{
+          'ok': true,
+          'model_updated': true,
+          'tree_count': 500,
+          'sha256_verified': true,
+          'security_level': 'safe',
+        },
+      );
+    } on Object catch (error) {
+      await AuraAIBrain.useSafeRuleFallback(
+        'No se pudo verificar o instalar el modelo remoto; se activaron las reglas locales: $error',
+        notifyHud: false,
+      );
+      return ToolResult(
+        summary:
+            'ERROR CRÍTICO: no se verificó el modelo remoto; se descartó el búfer y se usarán las reglas locales. $error',
+        data: const <String, dynamic>{
           'ok': false,
           'critical_integrity_failure': true,
           'security_level': 'critical',
         },
       );
     }
+  }
 
-    onProgress?.call('Descifrando e inyectando nuevas defensas en la RAM... 🧠');
-    final supportDirectory = await getApplicationSupportDirectory();
-    final modelFile = File('${supportDirectory.path}/aura_brain_model.enc');
-    await modelFile.parent.create(recursive: true);
-    await modelFile.writeAsBytes(modelResponse.bodyBytes, flush: true);
-    await AuraAIBrain.installDownloadedModel(
-      destination: modelFile,
-      encryptedHex: utf8.decode(modelResponse.bodyBytes),
-    );
-
-    return const ToolResult(
-      summary:
-          'Actualización verificada e instalada: el modelo local de 500 árboles fue renovado.',
-      data: <String, dynamic>{
-        'ok': true,
-        'model_updated': true,
-        'tree_count': 500,
-        'sha256_verified': true,
-        'security_level': 'safe',
+  static Future<ToolResult> _integrityFailure(String summary) async {
+    await AuraAIBrain.useSafeRuleFallback(summary, notifyHud: false);
+    return ToolResult(
+      summary: summary,
+      data: const <String, dynamic>{
+        'ok': false,
+        'critical_integrity_failure': true,
+        'security_level': 'critical',
       },
     );
   }

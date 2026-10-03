@@ -1,0 +1,35 @@
+# Local encryption tool and generated model artifacts
+/tool/encrypt_model.dart
+/assets/model/aura_brain_model.enc
+/assets/model/aura_brain_model.sha256
+**/*.tmp.json
+**/*.temp.json
+**/*.temporary.json
+**/*_tmp.json
+**/*_temp.json
+**/*-temp.json
+**/tmp_*.json
+**/temp_*.json
+**/*.plaintext.json
+**/*.decrypted.json
+**/*.json.tmp
+
+# Flutter and Android build output
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+android/.gradle/
+android/local.properties
+
+# Android signing material and local signing configuration
+*.jks
+*.keystore
+*.keystores
+*.jceks
+*.bks
+*.p12
+*.pfx
+key.properties
+**/key.properties

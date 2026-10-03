@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../ai_brain.dart';
 import '../providers/aura_state_provider.dart';
 import '../voice_engine.dart';
 import 'aura_intent_parser.dart';
@@ -7,7 +8,9 @@ import 'aura_tools.dart';
 import 'agent_event.dart';
 
 class AgentController {
-  AgentController._();
+  AgentController._() {
+    AuraAIBrain.onModelIntegrityFailure = reportCriticalError;
+  }
 
   static final AgentController instance = AgentController._();
 
@@ -25,6 +28,11 @@ class AgentController {
 
   void bindSecurityState(AuraStateProvider state) {
     _securityState = state;
+    if (history.any(
+      (event) => event.data?['critical_integrity_failure'] == true,
+    )) {
+      state.setSecurityLevel(AuraSecurityLevel.critical);
+    }
   }
 
   Future<void> run(String instruction) async {
@@ -76,7 +84,8 @@ class AgentController {
       );
       final succeeded = result.data['ok'] == true;
       final integrityCheckFailed =
-          result.data['critical_integrity_failure'] == true;
+          result.data['critical_integrity_failure'] == true ||
+              result.data['security_level'] == 'critical';
       if (intent.kind == AuraIntentKind.cryptographicPurge && succeeded) {
         history.clear();
         AuraIntentParser.clearHistory();
@@ -136,6 +145,20 @@ class AgentController {
       AgentEvent(
         kind: AgentEventKind.error,
         message: message,
+      ),
+    );
+  }
+
+  void reportCriticalError(String message) {
+    _securityState?.setSecurityLevel(AuraSecurityLevel.critical);
+    _emit(
+      AgentEvent(
+        kind: AgentEventKind.error,
+        message: message,
+        data: const <String, dynamic>{
+          'critical_integrity_failure': true,
+          'security_level': 'critical',
+        },
       ),
     );
   }

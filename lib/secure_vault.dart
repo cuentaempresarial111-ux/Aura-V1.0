@@ -1,14 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AuraSecureVault {
   static const String _auditLogsKey = 'aura_audit_logs_v1';
   static const String _modelMasterKeyStorageKey = 'aura_model_master_key_v1';
-  static const String defaultModelMasterKey =
-      'AuraMobileDefens::ModelMasterKey::2026::v1';
   static const int maxAuditLogs = 500;
+  static int _modelKeyGeneration = 0;
+  static Future<String>? _sharedModelMasterKeyLoad;
   static const AndroidOptions _androidOptions = AndroidOptions(
     encryptedSharedPreferences: true,
     resetOnError: true,
@@ -16,24 +17,62 @@ class AuraSecureVault {
   static Future<void> _writeQueue = Future<void>.value();
 
   final FlutterSecureStorage _storage;
+  final bool _usesDefaultStorage;
+  Future<String>? _modelMasterKeyLoad;
+  int _cachedModelKeyGeneration = -1;
 
   AuraSecureVault({FlutterSecureStorage? storage})
-      : _storage = storage ??
+      : _usesDefaultStorage = storage == null,
+        _storage = storage ??
             const FlutterSecureStorage(aOptions: _androidOptions);
 
-  Future<String> getOrCreateModelMasterKey() async {
-    final existingKey = await _storage.read(key: _modelMasterKeyStorageKey);
-    if (existingKey != null && existingKey.isNotEmpty) return existingKey;
+  Future<String> getOrCreateModelMasterKey() {
+    if (_usesDefaultStorage) {
+      return _sharedModelMasterKeyLoad ??=
+          _loadOrCreateModelMasterKey();
+    }
+    if (_modelMasterKeyLoad == null ||
+        _cachedModelKeyGeneration != _modelKeyGeneration) {
+      _cachedModelKeyGeneration = _modelKeyGeneration;
+      _modelMasterKeyLoad = _loadOrCreateModelMasterKey();
+    }
+    return _modelMasterKeyLoad!;
+  }
 
+  Future<String> _loadOrCreateModelMasterKey() async {
+    final existingKey = await _storage.read(key: _modelMasterKeyStorageKey);
+    if (existingKey != null && _isValidModelMasterKey(existingKey)) {
+      return existingKey;
+    }
+
+    final random = math.Random.secure();
+    final keyBytes = List<int>.generate(
+      32,
+      (_) => random.nextInt(256),
+      growable: false,
+    );
+    final generatedKey = base64UrlEncode(keyBytes).replaceAll('=', '');
+    keyBytes.fillRange(0, keyBytes.length, 0);
     await _storage.write(
       key: _modelMasterKeyStorageKey,
-      value: defaultModelMasterKey,
+      value: generatedKey,
     );
     final persistedKey = await _storage.read(key: _modelMasterKeyStorageKey);
-    if (persistedKey != defaultModelMasterKey) {
-      throw StateError('No se pudo inicializar la clave del modelo en SecureVault.');
+    if (persistedKey != generatedKey || !_isValidModelMasterKey(persistedKey)) {
+      throw StateError(
+        'No se pudo inicializar una clave aleatoria de 256 bits en SecureVault.',
+      );
     }
     return persistedKey!;
+  }
+
+  bool _isValidModelMasterKey(String? value) {
+    if (value == null || value.isEmpty) return false;
+    try {
+      return base64Url.decode(base64Url.normalize(value)).length == 32;
+    } on FormatException {
+      return false;
+    }
   }
 
   Future<void> saveAuditLogs(List<Map<String, dynamic>> newLogs) {
@@ -96,6 +135,10 @@ class AuraSecureVault {
         if ((await _storage.readAll()).isNotEmpty) {
           throw StateError('SecureVault conserva datos después de la purga.');
         }
+        _modelKeyGeneration++;
+        _sharedModelMasterKeyLoad = null;
+        _modelMasterKeyLoad = null;
+        _cachedModelKeyGeneration = -1;
         completion.complete();
       } catch (error, stackTrace) {
         completion.completeError(error, stackTrace);
