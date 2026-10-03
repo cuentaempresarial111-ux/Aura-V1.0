@@ -1,6 +1,14 @@
 import 'agent_event.dart';
 
-enum AuraIntentKind { block, isolate, status, unknown }
+enum AuraIntentKind {
+  block,
+  isolate,
+  panicIsolation,
+  resumeNetwork,
+  cryptographicPurge,
+  status,
+  unknown,
+}
 
 class AuraIntent {
   const AuraIntent({
@@ -17,7 +25,11 @@ class AuraIntent {
 
   AgentEvent toEvent() => AgentEvent(
         kind: switch (kind) {
-          AuraIntentKind.block || AuraIntentKind.isolate => AgentEventKind.action,
+          AuraIntentKind.block ||
+          AuraIntentKind.isolate ||
+          AuraIntentKind.panicIsolation ||
+          AuraIntentKind.resumeNetwork ||
+          AuraIntentKind.cryptographicPurge => AgentEventKind.action,
           AuraIntentKind.status => AgentEventKind.thought,
           AuraIntentKind.unknown => AgentEventKind.warning,
         },
@@ -50,6 +62,18 @@ class AuraIntentParser {
     r'\b(?:estado|status|salud|state|health|cómo está|como esta)\b',
     caseSensitive: false,
   );
+  static final RegExp _panicIsolationCommand = RegExp(
+    r'\b(?:pánico|panico|panic isolation|aislamiento de emergencia|aislar (?:la )?red|cortar (?:la )?red)\b',
+    caseSensitive: false,
+  );
+  static final RegExp _resumeNetworkCommand = RegExp(
+    r'\b(?:reanudar (?:la )?red|restablecer (?:la )?red|reanudar (?:el )?t[uú]nel|resume network|restore network)\b',
+    caseSensitive: false,
+  );
+  static final RegExp _cryptographicPurgeCommand = RegExp(
+    r'\b(?:purga criptográfica|purga criptografica|cryptographic purge|purga segura|borrado seguro de credenciales)\b',
+    caseSensitive: false,
+  );
   static final RegExp _ipv4Pattern = RegExp(r'\b(?:\d{1,3}\.){3}\d{1,3}\b');
   static final RegExp _hostPattern = RegExp(
     r'\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b',
@@ -75,13 +99,42 @@ class AuraIntentParser {
     );
   }
 
+  static void clearHistory() {
+    for (var index = 0; index < historyCapacity; index++) {
+      _historyBuffer[index] = null;
+    }
+    _nextHistoryIndex = 0;
+    _historySize = 0;
+  }
+
   static Future<AuraIntent> parse(String text) {
     final host = _extractHost(text);
     final isBlockCommand = _blockCommand.hasMatch(text);
     final isIsolateCommand = _isolateCommand.hasMatch(text);
 
     late final AuraIntent intent;
-    if (isBlockCommand && host != null) {
+    if (_panicIsolationCommand.hasMatch(text)) {
+      intent = AuraIntent(
+        name: 'panic_isolation',
+        kind: AuraIntentKind.panicIsolation,
+        entities: <String, dynamic>{},
+        confidence: 0.96,
+      );
+    } else if (_resumeNetworkCommand.hasMatch(text)) {
+      intent = AuraIntent(
+        name: 'resume_network',
+        kind: AuraIntentKind.resumeNetwork,
+        entities: <String, dynamic>{},
+        confidence: 0.96,
+      );
+    } else if (_cryptographicPurgeCommand.hasMatch(text)) {
+      intent = AuraIntent(
+        name: 'cryptographic_purge',
+        kind: AuraIntentKind.cryptographicPurge,
+        entities: <String, dynamic>{},
+        confidence: 0.96,
+      );
+    } else if (isBlockCommand && host != null) {
       intent = AuraIntent(
         name: 'block_domain',
         kind: AuraIntentKind.block,

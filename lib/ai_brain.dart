@@ -96,6 +96,7 @@ class AuraAIBrain {
       MethodChannel('com.aura.cyberdefense/engine');
   static const MethodChannel _shieldChannel =
       MethodChannel('com.ciberdefensa.aura/shield');
+  static final List<WeakReference<AuraAIBrain>> _instances = [];
 
   final AuraStateProvider? _stateProvider;
   final AuraSecureVault _secureVault;
@@ -114,7 +115,10 @@ class AuraAIBrain {
       _secureVault = secureVault ?? AuraSecureVault(),
         _onToolStarted = onToolStarted,
         _onToolCompleted = onToolCompleted,
-        _onDnsBlockRule = onDnsBlockRule;
+        _onDnsBlockRule = onDnsBlockRule {
+    _instances.removeWhere((reference) => reference.target == null);
+    _instances.add(WeakReference<AuraAIBrain>(this));
+  }
 
   void setDnsBlockRuleHandler(AuraDnsBlockRuleHandler handler) {
     _onDnsBlockRule = handler;
@@ -144,6 +148,42 @@ class AuraAIBrain {
     await (_modelLoad ??= _loadModel());
   }
 
+  static Future<void> purgeAllInMemoryModels() async {
+    final brains = _instances
+        .map((reference) => reference.target)
+        .whereType<AuraAIBrain>()
+        .toList(growable: false);
+    for (final brain in brains) {
+      await brain._purgeCachedModel();
+    }
+    _instances.removeWhere((reference) => reference.target == null);
+  }
+
+  Future<void> _purgeCachedModel() async {
+    final cachedLoad = _modelLoad;
+    _modelLoad = null;
+    if (cachedLoad == null) return;
+    try {
+      _clearModelValue(await cachedLoad);
+    } on Object {
+      return;
+    }
+  }
+
+  void _clearModelValue(Object? value) {
+    if (value is Map) {
+      for (final nestedValue in value.values.toList(growable: false)) {
+        _clearModelValue(nestedValue);
+      }
+      value.clear();
+    } else if (value is List) {
+      for (final nestedValue in value.toList(growable: false)) {
+        _clearModelValue(nestedValue);
+      }
+      value.clear();
+    }
+  }
+
   Future<String> analyzeThreatPayload(String payload) async {
     final domains = _extractDomains(payload);
     if (domains.isEmpty) {
@@ -163,16 +203,19 @@ class AuraAIBrain {
         final model = await (_modelLoad ??= _loadModel());
         final features = extractFeatures(domain);
         final trees = model['trees'];
-        if (trees is! List || trees.isEmpty) {
+        if (trees is! List || trees.length != 500) {
           throw const FormatException('El bosque local no contiene árboles.');
         }
-        final threatVotes = trees
-            .whereType<Map>()
-            .map((tree) => _evaluateNode(
-                  Map<String, dynamic>.from(tree)['root'],
-                  features,
-                ))
-            .fold<int>(0, (sum, prediction) => sum + prediction);
+        var threatVotes = 0;
+        for (final tree in trees) {
+          if (tree is! Map || !tree.containsKey('root')) {
+            throw const FormatException('Raíz de árbol inválida en el bosque local.');
+          }
+          threatVotes += _evaluateNode(
+            Map<String, dynamic>.from(tree)['root'],
+            features,
+          );
+        }
         final threatScore = threatVotes / trees.length;
         final isThreat = threatScore >= 0.5;
         _stateProvider?.recordLocalForestEvaluation();
@@ -226,7 +269,7 @@ class AuraAIBrain {
     final decoded = jsonDecode(encoded);
     if (decoded is! Map ||
       decoded['trees'] is! List ||
-      (decoded['trees'] as List).length != 20) {
+      (decoded['trees'] as List).length != 500) {
       throw const FormatException('El modelo local no contiene un bosque válido.');
     }
     return Map<String, dynamic>.from(decoded);

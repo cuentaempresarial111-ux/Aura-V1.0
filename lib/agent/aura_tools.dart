@@ -1,5 +1,8 @@
 import 'package:flutter/services.dart';
 
+import '../ai_brain.dart';
+import '../secure_vault.dart';
+
 class ToolStep {
   const ToolStep({
     required this.name,
@@ -23,6 +26,7 @@ class ToolResult {
 abstract class AuraTools {
   static const MethodChannel _engineChannel =
       MethodChannel('com.aura.cyberdefense/engine');
+  static final AuraSecureVault _secureVault = AuraSecureVault();
 
   static Future<ToolResult> execute(ToolStep step) async {
     try {
@@ -64,6 +68,54 @@ abstract class AuraTools {
                 nativeResult['error'] as String? ??
                 'Android devolvió el resultado de la solicitud.',
             data: Map<String, dynamic>.from(nativeResult),
+          );
+        case 'panic_isolation':
+          final isolated = await _engineChannel.invokeMethod<bool>(
+                'panicIsolation',
+              ) ??
+              false;
+          return ToolResult(
+            summary: isolated
+                ? 'Forwarding del túnel detenido; la interfaz VPN queda en modo de descarte.'
+                : 'No se confirmó el aislamiento: el túnel VPN no estaba activo.',
+            data: <String, dynamic>{
+              'ok': isolated,
+              'isolation_active': isolated,
+              'scope': 'active_vpn_tun',
+              'security_level': isolated ? 'critical' : 'warning',
+            },
+          );
+        case 'resume_network':
+          final resumed = await _engineChannel.invokeMethod<bool>(
+                'resumeTunnel',
+              ) ??
+              false;
+          return ToolResult(
+            summary: resumed
+                ? 'Forwarding del túnel restablecido.'
+                : 'No se pudo restablecer el forwarding del túnel.',
+            data: <String, dynamic>{
+              'ok': resumed,
+              'security_level': resumed ? 'safe' : 'warning',
+            },
+          );
+        case 'cryptographic_purge':
+          await AuraAIBrain.purgeAllInMemoryModels();
+          final nativeAuditPurged = await _engineChannel.invokeMethod<bool>(
+                'purgeAuditMemory',
+              ) ??
+              false;
+          await _secureVault.purgeSensitiveData();
+          return const ToolResult(
+            summary:
+                'Cachés de modelos y datos de SecureVault eliminados. No hay una API key registrada en este almacenamiento.',
+            data: <String, dynamic>{
+              'ok': true,
+              'model_cache_purged': true,
+              'secure_storage_purged': true,
+              'native_audit_memory_purged': nativeAuditPurged,
+              'api_key_present': false,
+            },
           );
         default:
           return ToolResult(

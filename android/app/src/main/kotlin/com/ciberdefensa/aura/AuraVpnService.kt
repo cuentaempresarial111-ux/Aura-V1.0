@@ -39,6 +39,8 @@ class AuraVpnService : VpnService() {
         private const val NOTIFICATION_ID = 8816
         private const val NOTIFICATION_TEXT =
             "Protección agéntica local en tiempo real operando sin interrupciones."
+        private const val VPN_STATE_PREFERENCES = "aura_vpn_state"
+        private const val PANIC_ISOLATION_KEY = "panic_isolation_active"
         private const val MAX_BLOCKED_IPS = 8192
         private val dnsMetricsLock = Any()
         @Volatile private var activeService: AuraVpnService? = null
@@ -49,6 +51,24 @@ class AuraVpnService : VpnService() {
         @JvmStatic
         fun protectSocket(socketFd: Int): Boolean =
             activeService?.protect(socketFd) ?: false
+
+        @JvmStatic
+        fun engagePanicIsolation(): Boolean =
+            activeService?.enterPanicIsolation() ?: false
+
+        @JvmStatic
+        fun resumeTunnel(): Boolean = activeService?.resumeTunnelForwarding() ?: false
+
+        @JvmStatic
+        fun clearDnsAuditMemory() {
+            synchronized(dnsMetricsLock) {
+                auditedDnsRequests = 0
+                blockedDnsRequests = 0
+                lastDnsDomain = ""
+                lastDnsAction = ""
+                activeService?.scheduleNotificationUpdate()
+            }
+        }
 
         fun recordDnsAuditEvent(event: Map<String, Any>) {
             val action = event["action"] as? String ?: return
@@ -77,11 +97,17 @@ class AuraVpnService : VpnService() {
     private var notificationUpdatePending = false
     private var vpnInterface: ParcelFileDescriptor? = null
     private var integrityCheckScheduled = false
+    private var feedRefreshScheduled = false
+    @Volatile private var panicIsolationActive = false
     @Volatile private var tunnelStarted = false
 
     override fun onCreate() {
         super.onCreate()
         activeService = this
+        panicIsolationActive = getSharedPreferences(
+            VPN_STATE_PREFERENCES,
+            MODE_PRIVATE,
+        ).getBoolean(PANIC_ISOLATION_KEY, false)
     }
 
     override fun onStartCommand(
@@ -102,6 +128,13 @@ class AuraVpnService : VpnService() {
                 30,
                 TimeUnit.SECONDS,
             )
+        }
+        if (panicIsolationActive) {
+            if (vpnInterface == null && startRequested.compareAndSet(false, true)) {
+                worker.execute { establishPanicIsolationInterface() }
+            }
+            reportState(false, "Aislamiento de emergencia activo; forwarding detenido.")
+            return Service.START_STICKY
         }
         if (tunnelStarted) {
             reportState(true, "El escudo VPN ya estaba activo.")
@@ -152,16 +185,7 @@ class AuraVpnService : VpnService() {
             verifySocks5(proxyAddress)
             replaceBlockedIps(downloadThreatFeed())
 
-            val builder = Builder()
-                .setSession("Aura Mobile Defens")
-                .setMtu(1500)
-                .addAddress("10.0.0.2", 24)
-                .addAddress("fd00::2", 64)
-                .addRoute("0.0.0.0", 0)
-                .addRoute("::", 0)
-                .addDnsServer("10.0.0.3")
-
-            established = builder.establish()
+            established = createVpnBuilder().establish()
                 ?: throw IOException("Android no estableció la interfaz VPN.")
 
             val configFile = File(filesDir, "aura-hev-socks5.yml")
@@ -208,6 +232,103 @@ mapdns:
             stopSelf()
         }
     }
+
+    @Synchronized
+    private fun enterPanicIsolation(): Boolean {
+        if (panicIsolationActive) return vpnInterface != null
+        if (!tunnelStarted || vpnInterface == null) return false
+
+        return try {
+            val persisted = getSharedPreferences(VPN_STATE_PREFERENCES, MODE_PRIVATE)
+                .edit()
+                .putBoolean(PANIC_ISOLATION_KEY, true)
+                .commit()
+            if (!persisted) return false
+            if (!TProxyService.TProxyStopService()) {
+                getSharedPreferences(VPN_STATE_PREFERENCES, MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(PANIC_ISOLATION_KEY, false)
+                    .commit()
+                return false
+            }
+            tunnelStarted = false
+            panicIsolationActive = true
+            startRequested.set(false)
+            reportState(false, "Aislamiento de emergencia activo; forwarding detenido.")
+            updateForegroundNotification()
+            true
+        } catch (exception: Exception) {
+            getSharedPreferences(VPN_STATE_PREFERENCES, MODE_PRIVATE)
+                .edit()
+                .putBoolean(PANIC_ISOLATION_KEY, false)
+                .commit()
+            panicIsolationActive = false
+            Log.e("AuraVPN", "No se pudo detener el forwarding del túnel.", exception)
+            false
+        }
+    }
+
+    @Synchronized
+    private fun resumeTunnelForwarding(): Boolean {
+        if (!panicIsolationActive) return tunnelStarted
+        val tun = vpnInterface ?: return false
+        val configFile = File(filesDir, "aura-hev-socks5.yml")
+        if (!configFile.isFile) return false
+
+        return try {
+            TProxyService.TProxySetBlockedIps(blockedIpSnapshot())
+            if (!TProxyService.TProxyStartService(configFile.absolutePath, tun.fd)) {
+                return false
+            }
+            val cleared = getSharedPreferences(VPN_STATE_PREFERENCES, MODE_PRIVATE)
+                .edit()
+                .putBoolean(PANIC_ISOLATION_KEY, false)
+                .commit()
+            if (!cleared) {
+                TProxyService.TProxyStopService()
+                return false
+            }
+            panicIsolationActive = false
+            tunnelStarted = true
+            startRequested.set(true)
+            scheduleFeedRefresh()
+            reportState(true, "Forwarding del túnel VPN restablecido.")
+            updateForegroundNotification()
+            true
+        } catch (exception: Exception) {
+            if (TProxyService.TProxyIsRunning()) {
+                TProxyService.TProxyStopService()
+            }
+            Log.e("AuraVPN", "No se pudo reanudar el forwarding del túnel.", exception)
+            false
+        }
+    }
+
+    private fun establishPanicIsolationInterface() {
+        var established: ParcelFileDescriptor? = null
+        try {
+            established = createVpnBuilder().establish()
+                ?: throw IOException("Android no restableció la interfaz VPN aislada.")
+            vpnInterface = established
+            reportState(false, "Aislamiento de emergencia activo; tráfico en descarte.")
+            updateForegroundNotification()
+        } catch (exception: Exception) {
+            Log.e("AuraVPN", "No se pudo restablecer la interfaz aislada.", exception)
+            established?.close()
+            vpnInterface = null
+            startRequested.set(false)
+            reportState(false, exception.message ?: "Falló el aislamiento de red.")
+        }
+    }
+
+    private fun createVpnBuilder(): Builder = Builder()
+        .setSession("Aura Mobile Defens")
+        .setMtu(1500)
+        .addAddress("10.0.0.2", 24)
+        .addAddress("fd00::2", 64)
+        .addRoute("0.0.0.0", 0)
+        .addRoute("::", 0)
+        .addDnsServer("10.0.0.3")
 
     private fun resolveProxyAddress(): String {
         return InetAddress.getAllByName(SOCKS5_HOST)
@@ -282,6 +403,8 @@ mapdns:
     }
 
     private fun scheduleFeedRefresh() {
+        if (feedRefreshScheduled) return
+        feedRefreshScheduled = true
         feedRefresh.scheduleWithFixedDelay({
             try {
                 val updated = downloadThreatFeed()
@@ -315,13 +438,20 @@ mapdns:
     }
 
     private fun currentDnsSummary(): String = synchronized(dnsMetricsLock) {
-        if (auditedDnsRequests == 0L) {
+        if (panicIsolationActive) {
+            "AISLAMIENTO ACTIVO · forwarding detenido"
+        } else if (auditedDnsRequests == 0L) {
             "Túnel activo · esperando eventos DNS"
         } else {
             val domain = lastDnsDomain.take(52)
             "DNS $auditedDnsRequests · bloqueados $blockedDnsRequests · " +
                 "$domain $lastDnsAction"
         }
+    }
+
+    private fun updateForegroundNotification() {
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, createNotification(currentDnsSummary()))
     }
 
     private fun createNotification(

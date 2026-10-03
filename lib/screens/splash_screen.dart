@@ -104,7 +104,7 @@ class _SplashScreenState extends State<SplashScreen>
       if (!mounted) return;
       setState(() {
         _loadingProgress = 0.85;
-        _bootStatusText = 'BOSQUE LOCAL VALIDADO: 20 ÁRBOLES.';
+        _bootStatusText = 'BOSQUE LOCAL VALIDADO: 500 ÁRBOLES.';
       });
       await Future<void>.delayed(const Duration(milliseconds: 350));
       if (!mounted) return;

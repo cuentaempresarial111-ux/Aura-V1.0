@@ -117,4 +117,14 @@ class AuraStateProvider extends ChangeNotifier {
     _localForestEvaluations++;
     notifyListeners();
   }
+
+  void clearTelemetryHistory() {
+    _telemetryEvents.clear();
+    _lastNetworkAction = null;
+    _localForestEvaluations = 0;
+    _encryptedDnsBlocks = 0;
+    _tunnelBytesProcessed = 0;
+    _liveConsoleLogs = '';
+    notifyListeners();
+  }
 }

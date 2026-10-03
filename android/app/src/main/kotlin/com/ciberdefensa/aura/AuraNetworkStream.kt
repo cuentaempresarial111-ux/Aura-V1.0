@@ -18,6 +18,12 @@ private data class PendingDnsEvent(
     val action: String,
     val sourceAddress: String,
     val sourcePort: Int,
+    val generation: Long,
+)
+
+private data class QueuedPlatformEvent(
+    val generation: Long,
+    val value: Map<String, Any>,
 )
 
 object AuraNetworkStream : EventChannel.StreamHandler {
@@ -30,11 +36,12 @@ object AuraNetworkStream : EventChannel.StreamHandler {
         Thread(runnable, "AuraDnsUidResolver").apply { isDaemon = true }
     }
     private val pendingDnsEvents = ArrayDeque<PendingDnsEvent>()
-    private val pendingEvents = ArrayDeque<Map<String, Any>>()
+    private val pendingEvents = ArrayDeque<QueuedPlatformEvent>()
     private var applicationContext: Context? = null
     private var eventSink: EventChannel.EventSink? = null
     private var drainScheduled = false
     private var resolverScheduled = false
+    private var eventGeneration = 0L
 
     fun setApplicationContext(context: Context) {
         applicationContext = context.applicationContext
@@ -56,6 +63,14 @@ object AuraNetworkStream : EventChannel.StreamHandler {
         }
     }
 
+    fun clearQueuedEvents() {
+        synchronized(lock) {
+            eventGeneration++
+            pendingDnsEvents.clear()
+            pendingEvents.clear()
+        }
+    }
+
     fun emitDnsEvent(
         domain: String,
         actionCode: Int,
@@ -71,7 +86,12 @@ object AuraNetworkStream : EventChannel.StreamHandler {
             if (pendingDnsEvents.size == MAX_PENDING_EVENTS) pendingDnsEvents.removeFirst()
             pendingDnsEvents.addLast(
                 PendingDnsEvent(
-                    System.currentTimeMillis(), domain, action, sourceAddress, sourcePort,
+                    System.currentTimeMillis(),
+                    domain,
+                    action,
+                    sourceAddress,
+                    sourcePort,
+                    eventGeneration,
                 ),
             )
             if (!resolverScheduled) {
@@ -98,12 +118,18 @@ object AuraNetworkStream : EventChannel.StreamHandler {
                 "requested_domain" to pending.domain,
                 "action" to pending.action,
             )
-            AuraVpnService.recordDnsAuditEvent(event)
-            synchronized(lock) {
-                if (pendingEvents.size == MAX_PENDING_EVENTS) pendingEvents.removeFirst()
-                pendingEvents.addLast(event)
-                scheduleDrainLocked()
+            val queued = synchronized(lock) {
+                if (pending.generation != eventGeneration) {
+                    false
+                } else {
+                    AuraVpnService.recordDnsAuditEvent(event)
+                    if (pendingEvents.size == MAX_PENDING_EVENTS) pendingEvents.removeFirst()
+                    pendingEvents.addLast(QueuedPlatformEvent(eventGeneration, event))
+                    scheduleDrainLocked()
+                    true
+                }
             }
+            if (!queued) continue
         }
     }
 
@@ -143,9 +169,15 @@ object AuraNetworkStream : EventChannel.StreamHandler {
         val event: Map<String, Any>?
         synchronized(lock) {
             sink = eventSink
-            event = if (sink == null) null else pendingEvents.pollFirst()
+            val queuedEvent = if (sink == null) null else pendingEvents.pollFirst()
+            if (queuedEvent == null) {
+                drainScheduled = false
+                return
+            }
+            event = queuedEvent.value.takeIf { queuedEvent.generation == eventGeneration }
             if (event == null) {
                 drainScheduled = false
+                scheduleDrainLocked()
                 return
             }
         }

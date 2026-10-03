@@ -64,12 +64,21 @@ class AgentController {
         ToolStep(name: intent.name, arguments: intent.entities),
       );
       final succeeded = result.data['ok'] == true;
+      if (intent.kind == AuraIntentKind.cryptographicPurge && succeeded) {
+        history.clear();
+        AuraIntentParser.clearHistory();
+        _securityState?.clearTelemetryHistory();
+      }
       final userActionRequired = result.data['user_action_required'] == true;
-      _securityState?.setSecurityLevel(
-        succeeded && !userActionRequired
+      final securityLevel = switch (result.data['security_level']) {
+        'critical' => AuraSecurityLevel.critical,
+        'warning' => AuraSecurityLevel.warning,
+        'safe' => AuraSecurityLevel.safe,
+        _ => succeeded && !userActionRequired
             ? AuraSecurityLevel.safe
             : AuraSecurityLevel.warning,
-      );
+      };
+      _securityState?.setSecurityLevel(securityLevel);
       _emit(
         AgentEvent(
           kind: succeeded && !userActionRequired

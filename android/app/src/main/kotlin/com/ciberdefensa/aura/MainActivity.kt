@@ -187,6 +187,26 @@ class MainActivity: FlutterFragmentActivity() {
             ENGINE_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
+                "purgeAuditMemory" -> {
+                    AuraNetworkStream.clearQueuedEvents()
+                    AuraVpnService.clearDnsAuditMemory()
+                    result.success(true)
+                }
+
+                "panicIsolation" -> {
+                    genomeScannerExecutor.execute {
+                        val isolated = AuraVpnService.engagePanicIsolation()
+                        runOnUiThread { result.success(isolated) }
+                    }
+                }
+
+                "resumeTunnel" -> {
+                    genomeScannerExecutor.execute {
+                        val resumed = AuraVpnService.resumeTunnel()
+                        runOnUiThread { result.success(resumed) }
+                    }
+                }
+
                 "getTunnelStats" -> {
                     if (!TProxyService.TProxyIsRunning()) {
                         result.success(longArrayOf(0, 0, 0, 0))

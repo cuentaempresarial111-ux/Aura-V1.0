@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -86,4 +87,20 @@ class AuraSecureVault {
   Future<List<Map<String, dynamic>>> readLogsSecurely() => getAuditLogs();
 
   Future<void> clearLogsSecurely() => _storage.delete(key: _auditLogsKey);
+
+  Future<void> purgeSensitiveData() {
+    final completion = Completer<void>();
+    _writeQueue = _writeQueue.then((_) async {
+      try {
+        await _storage.deleteAll();
+        if ((await _storage.readAll()).isNotEmpty) {
+          throw StateError('SecureVault conserva datos después de la purga.');
+        }
+        completion.complete();
+      } catch (error, stackTrace) {
+        completion.completeError(error, stackTrace);
+      }
+    });
+    return completion.future;
+  }
 }
