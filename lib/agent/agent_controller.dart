@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../providers/aura_state_provider.dart';
+import '../voice_engine.dart';
 import 'aura_intent_parser.dart';
 import 'aura_tools.dart';
 import 'agent_event.dart';
@@ -11,6 +12,7 @@ class AgentController {
   static final AgentController instance = AgentController._();
 
   static const int maxHistoryLength = 500;
+  static final AuraVoiceEngine _voiceEngine = AuraVoiceEngine();
 
   final StreamController<AgentEvent> _eventController =
       StreamController<AgentEvent>.broadcast();
@@ -62,8 +64,19 @@ class AgentController {
       _emit(intent.toEvent());
       final result = await AuraTools.execute(
         ToolStep(name: intent.name, arguments: intent.entities),
+        onProgress: intent.kind == AuraIntentKind.updateDefenses
+            ? (message) => _emit(
+                  AgentEvent(
+                    kind: AgentEventKind.thought,
+                    message: message,
+                    data: <String, dynamic>{'tool': intent.name},
+                  ),
+                )
+            : null,
       );
       final succeeded = result.data['ok'] == true;
+      final integrityCheckFailed =
+          result.data['critical_integrity_failure'] == true;
       if (intent.kind == AuraIntentKind.cryptographicPurge && succeeded) {
         history.clear();
         AuraIntentParser.clearHistory();
@@ -81,13 +94,31 @@ class AgentController {
       _securityState?.setSecurityLevel(securityLevel);
       _emit(
         AgentEvent(
-          kind: succeeded && !userActionRequired
-              ? AgentEventKind.success
-              : AgentEventKind.warning,
+          kind: integrityCheckFailed
+              ? AgentEventKind.error
+              : succeeded && !userActionRequired
+                  ? AgentEventKind.success
+                  : AgentEventKind.warning,
           message: result.summary,
           data: result.data,
         ),
       );
+      if (intent.kind == AuraIntentKind.updateDefenses && succeeded) {
+        try {
+          await _voiceEngine.speak(
+            'Actualización completada. El modelo local de 500 árboles fue renovado.',
+          );
+        } on Object catch (error) {
+          _emit(
+            AgentEvent(
+              kind: AgentEventKind.warning,
+              message:
+                  'Actualización completada, pero falló la narración por voz: $error',
+              data: <String, dynamic>{'tool': intent.name},
+            ),
+          );
+        }
+      }
     } on Object catch (error) {
       _securityState?.setSecurityLevel(AuraSecurityLevel.warning);
       _emit(

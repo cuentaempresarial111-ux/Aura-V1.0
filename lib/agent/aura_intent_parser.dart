@@ -6,6 +6,7 @@ enum AuraIntentKind {
   panicIsolation,
   resumeNetwork,
   cryptographicPurge,
+  updateDefenses,
   status,
   unknown,
 }
@@ -29,7 +30,8 @@ class AuraIntent {
           AuraIntentKind.isolate ||
           AuraIntentKind.panicIsolation ||
           AuraIntentKind.resumeNetwork ||
-          AuraIntentKind.cryptographicPurge => AgentEventKind.action,
+          AuraIntentKind.cryptographicPurge ||
+          AuraIntentKind.updateDefenses => AgentEventKind.action,
           AuraIntentKind.status => AgentEventKind.thought,
           AuraIntentKind.unknown => AgentEventKind.warning,
         },
@@ -72,6 +74,10 @@ class AuraIntentParser {
   );
   static final RegExp _cryptographicPurgeCommand = RegExp(
     r'\b(?:purga criptográfica|purga criptografica|cryptographic purge|purga segura|borrado seguro de credenciales)\b',
+    caseSensitive: false,
+  );
+  static final RegExp _updateDefensesCommand = RegExp(
+    r'\b(?:actualizar sistema de defensas|actualizar|update defenses|update)\b',
     caseSensitive: false,
   );
   static final RegExp _ipv4Pattern = RegExp(r'\b(?:\d{1,3}\.){3}\d{1,3}\b');
@@ -131,6 +137,13 @@ class AuraIntentParser {
       intent = AuraIntent(
         name: 'cryptographic_purge',
         kind: AuraIntentKind.cryptographicPurge,
+        entities: <String, dynamic>{},
+        confidence: 0.96,
+      );
+    } else if (_updateDefensesCommand.hasMatch(text)) {
+      intent = AuraIntent(
+        name: 'update_defenses',
+        kind: AuraIntentKind.updateDefenses,
         entities: <String, dynamic>{},
         confidence: 0.96,
       );

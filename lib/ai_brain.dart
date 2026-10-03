@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'agent/aura_crypto_layer.dart';
 import 'agent/aura_whitelist.dart';
@@ -159,6 +161,32 @@ class AuraAIBrain {
     _instances.removeWhere((reference) => reference.target == null);
   }
 
+  static Future<void> installDownloadedModel({
+    required File destination,
+    required String encryptedHex,
+  }) async {
+    final secureKey = await AuraSecureVault().getOrCreateModelMasterKey();
+    final decoded = jsonDecode(
+      AuraCryptoLayer.decryptModel(encryptedHex, secureKey),
+    );
+    if (decoded is! Map ||
+        decoded['trees'] is! List ||
+        (decoded['trees'] as List).length != 500) {
+      throw const FormatException(
+        'El modelo descargado no contiene un bosque válido de 500 árboles.',
+      );
+    }
+    await destination.parent.create(recursive: true);
+    await destination.writeAsString(encryptedHex, flush: true);
+    for (final brain in _instances
+        .map((reference) => reference.target)
+        .whereType<AuraAIBrain>()) {
+      brain._modelLoad = Future<Map<String, dynamic>>.value(
+        Map<String, dynamic>.from(decoded as Map),
+      );
+    }
+  }
+
   Future<void> _purgeCachedModel() async {
     final cachedLoad = _modelLoad;
     _modelLoad = null;
@@ -263,14 +291,20 @@ class AuraAIBrain {
   }
 
   Future<Map<String, dynamic>> _loadModel() async {
-    final encryptedHex = await rootBundle.loadString(_modelAssetPath);
+    final supportDirectory = await getApplicationSupportDirectory();
+    final installedModel = File('${supportDirectory.path}/aura_brain_model.enc');
+    final encryptedHex = await installedModel.exists()
+        ? await installedModel.readAsString()
+        : await rootBundle.loadString(_modelAssetPath);
     final secureKey = await _secureVault.getOrCreateModelMasterKey();
     final encoded = AuraCryptoLayer.decryptModel(encryptedHex, secureKey);
     final decoded = jsonDecode(encoded);
     if (decoded is! Map ||
-      decoded['trees'] is! List ||
-      (decoded['trees'] as List).length != 500) {
-      throw const FormatException('El modelo local no contiene un bosque válido.');
+        decoded['trees'] is! List ||
+        (decoded['trees'] as List).length != 500) {
+      throw const FormatException(
+        'El modelo local no contiene un bosque válido de 500 árboles.',
+      );
     }
     return Map<String, dynamic>.from(decoded);
   }

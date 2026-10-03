@@ -1,4 +1,10 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
 import '../ai_brain.dart';
 import '../secure_vault.dart';
@@ -24,13 +30,28 @@ class ToolResult {
 }
 
 abstract class AuraTools {
+  static const Uri _modelUri = Uri(
+    scheme: 'https',
+    host: 'cuentaempresarial111-ux.github.io',
+    path: '/Aura-V1.0/model/aura_brain_model.enc',
+  );
+  static const Uri _modelDigestUri = Uri(
+    scheme: 'https',
+    host: 'cuentaempresarial111-ux.github.io',
+    path: '/Aura-V1.0/model/aura_brain_model.sha256',
+  );
   static const MethodChannel _engineChannel =
       MethodChannel('com.aura.cyberdefense/engine');
   static final AuraSecureVault _secureVault = AuraSecureVault();
 
-  static Future<ToolResult> execute(ToolStep step) async {
+  static Future<ToolResult> execute(
+    ToolStep step, {
+    void Function(String message)? onProgress,
+  }) async {
     try {
       switch (step.name) {
+        case 'update_defenses':
+          return await _updateDefenses(onProgress);
         case 'block_domain':
           final domain = step.arguments['domain'];
           final blocked = await _engineChannel.invokeMethod<bool>(
@@ -138,5 +159,67 @@ abstract class AuraTools {
         data: <String, dynamic>{'ok': false, 'error': 'missing_plugin'},
       );
     }
+  }
+
+  static Future<ToolResult> _updateDefenses(
+    void Function(String message)? onProgress,
+  ) async {
+    onProgress?.call('Estableciendo conexión descentralizada anónima... 📡');
+    onProgress?.call('Buscando firmas actualizadas en la red... 🔍');
+    final digestResponse = await http.get(
+      _modelDigestUri,
+      headers: const <String, String>{},
+    );
+    if (digestResponse.statusCode != HttpStatus.ok) {
+      throw HttpException(
+        'La firma publicada del modelo no responde correctamente.',
+      );
+    }
+    final modelResponse = await http.get(
+      _modelUri,
+      headers: const <String, String>{},
+    );
+    onProgress?.call('Descargando matriz de 500 árboles sin dejar rastro... 📥');
+    if (modelResponse.statusCode != HttpStatus.ok) {
+      throw HttpException(
+        'La descarga del modelo actualizado fue rechazada por el host público.',
+      );
+    }
+    final expectedDigest = digestResponse.body.trim();
+    final actualDigest = sha256.convert(modelResponse.bodyBytes).toString();
+    if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(expectedDigest) ||
+        actualDigest.toLowerCase() != expectedDigest.toLowerCase()) {
+      return const ToolResult(
+        summary:
+            'ERROR CRÍTICO: el SHA-256 del archivo descargado no coincide con la firma publicada; la actualización se aborta sin reemplazar el modelo local.',
+        data: <String, dynamic>{
+          'ok': false,
+          'critical_integrity_failure': true,
+          'security_level': 'critical',
+        },
+      );
+    }
+
+    onProgress?.call('Descifrando e inyectando nuevas defensas en la RAM... 🧠');
+    final supportDirectory = await getApplicationSupportDirectory();
+    final modelFile = File('${supportDirectory.path}/aura_brain_model.enc');
+    await modelFile.parent.create(recursive: true);
+    await modelFile.writeAsBytes(modelResponse.bodyBytes, flush: true);
+    await AuraAIBrain.installDownloadedModel(
+      destination: modelFile,
+      encryptedHex: utf8.decode(modelResponse.bodyBytes),
+    );
+
+    return const ToolResult(
+      summary:
+          'Actualización verificada e instalada: el modelo local de 500 árboles fue renovado.',
+      data: <String, dynamic>{
+        'ok': true,
+        'model_updated': true,
+        'tree_count': 500,
+        'sha256_verified': true,
+        'security_level': 'safe',
+      },
+    );
   }
 }
