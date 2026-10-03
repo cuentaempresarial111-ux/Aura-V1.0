@@ -19,13 +19,14 @@ workflows:
           cd "${CM_BUILD_DIR:?CM_BUILD_DIR is required}"
           : "${FLUTTER_ROOT:?FLUTTER_ROOT is required}"
           printf 'flutter.sdk=%s\n' "$FLUTTER_ROOT" > android/local.properties
-      - name: Build Android APK (Release)
+      - name: Build Android APK (Release, signed model updates)
         script: |
           set -euo pipefail
           cd "${CM_BUILD_DIR:?CM_BUILD_DIR is required}"
           flutter clean
           flutter pub get
-          flutter build apk --release
+          : "${AURA_PUBLIC_KEY_ENV:?Configure AURA_PUBLIC_KEY_ENV in the Codemagic environment}"
+          flutter build apk --release --dart-define="AURA_PUBLIC_KEY=$AURA_PUBLIC_KEY_ENV"
     artifacts:
       - build/app/outputs/flutter-apk/*.apk
       

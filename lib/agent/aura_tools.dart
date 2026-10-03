@@ -173,8 +173,12 @@ abstract class AuraTools {
     void Function(String message)? onProgress,
   ) async {
     try {
-      onProgress?.call('Estableciendo conexión HTTPS al repositorio público... 📡');
-      onProgress?.call('Buscando el digest SHA-256 publicado... 🔍');
+      onProgress?.call(
+        'Conectando por HTTPS al repositorio público de modelos... 📡',
+      );
+      onProgress?.call(
+        'Buscando la firma RSA y el digest SHA-256 publicados... 🔍',
+      );
       final digestResponse = await http.get(
         _modelDigestUri,
         headers: const <String, String>{},
@@ -198,6 +202,7 @@ abstract class AuraTools {
         );
       }
 
+      onProgress?.call('Descargando el modelo firmado de 500 árboles... 📥');
       final modelResponse = await http.get(
         _modelUri,
         headers: const <String, String>{},
@@ -214,7 +219,6 @@ abstract class AuraTools {
           'El modelo público está vacío, excede el tamaño permitido o no está disponible.',
         );
       }
-      onProgress?.call('Descargando matriz de 500 árboles... 📥');
 
       final expectedDigest = utf8.decode(digestResponse.bodyBytes).trim();
       final modelBytes = Uint8List.fromList(modelResponse.bodyBytes);
@@ -237,7 +241,7 @@ abstract class AuraTools {
       }
 
       onProgress?.call(
-        'Verificando el modelo y cifrándolo con la clave aleatoria del dispositivo... 🧠',
+        'Validando la estructura, cifrando para este dispositivo e instalando el modelo local... 🧠',
       );
       final supportDirectory = await getApplicationSupportDirectory();
       await AuraAIBrain.installDownloadedModel(

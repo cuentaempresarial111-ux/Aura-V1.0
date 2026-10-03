@@ -286,7 +286,7 @@ class AgentController {
       );
       if (intent.kind == AuraIntentKind.updateDefenses && succeeded) {
         await _speakResponse(
-          'Actualización completada. El modelo local de 500 árboles fue renovado.',
+          'Actualización completada. El modelo local de 500 árboles fue verificado e instalado.',
         );
       }
     } on Object catch (error) {
