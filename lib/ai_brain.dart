@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'agent/aura_crypto_layer.dart';
 import 'agent/aura_whitelist.dart';
+import 'models/aura_ai_brain.dart';
 import 'secure_vault.dart';
 import 'providers/aura_state_provider.dart';
 
@@ -46,18 +47,6 @@ const Set<String> _suspiciousTlds = {
   'xyz',
   'zip',
 };
-
-const Set<String> _domainFieldNames = {
-  'domain',
-  'host',
-  'hostname',
-  'qname',
-  'requested_domain',
-};
-
-final RegExp _domainPattern = RegExp(
-  r'[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9-]{1,63})+',
-);
 
 double calculateShannonEntropy(String core) {
   if (core.isEmpty) return 0;
@@ -377,45 +366,45 @@ class AuraAIBrain {
   }
 
   Future<String> analyzeThreatPayload(String payload) async {
-    final domains = _extractDomains(payload);
-    if (domains.isEmpty) {
-      return 'Análisis local limitado a dominios: no se encontró un dominio válido.';
-    }
-
     try {
-      final results = <String>[];
       if (_forceRuleFallback) {
+        final domains = _extractDomains(payload);
+        if (domains.isEmpty) {
+          return 'Análisis local limitado a dominios: no se encontró un dominio válido.';
+        }
         return _analyzeWithDefaultRules(domains);
       }
-      for (final domain in domains) {
+      if (!payload.contains('.')) {
+        return 'Análisis local limitado a dominios: no se encontró un dominio válido.';
+      }
+      final model = await _getModel();
+      if (_forceRuleFallback) {
+        final domains = _extractDomains(payload);
+        if (domains.isEmpty) {
+          return 'Análisis local limitado a dominios: no se encontró un dominio válido.';
+        }
+        return _analyzeWithDefaultRules(domains);
+      }
+      final inferenceResults = await AuraAIInference.analyzeThreatPayload(
+        rawData: payload,
+        modelStructure: model,
+        suspiciousTlds: _suspiciousTlds.toList(growable: false),
+      );
+      if (inferenceResults.isEmpty) {
+        return 'Análisis local limitado a dominios: no se encontró un dominio válido.';
+      }
+
+      final results = <String>[];
+      for (final inference in inferenceResults) {
+        final domain = inference.host;
+        final threatScore = inference.threatScore;
+        final isThreat = inference.isThreat;
         if (AuraWhitelist.isSafe(domain)) {
           results.add(
             'Dominio seguro por allowlist: $domain (0% de votos de amenaza).',
           );
           continue;
         }
-
-        final model = await _getModel();
-        if (_forceRuleFallback) {
-          return _analyzeWithDefaultRules(domains);
-        }
-        final features = extractFeatures(domain);
-        final trees = model['trees'];
-        if (trees is! List || trees.length != 500) {
-          throw const FormatException('El bosque local no contiene árboles.');
-        }
-        var threatVotes = 0;
-        for (final tree in trees) {
-          if (tree is! Map || !tree.containsKey('root')) {
-            throw const FormatException('Raíz de árbol inválida en el bosque local.');
-          }
-          threatVotes += _evaluateNode(
-            Map<String, dynamic>.from(tree)['root'],
-            features,
-          );
-        }
-        final threatScore = threatVotes / trees.length;
-        final isThreat = threatScore >= 0.5;
         _stateProvider?.recordLocalForestEvaluation();
 
         if (isThreat) {
@@ -580,41 +569,14 @@ class AuraAIBrain {
     return results.join('\n');
   }
 
-  int _evaluateNode(Object? rawNode, List<double> features) {
-    if (rawNode is! Map) {
-      throw const FormatException('Nodo inválido en el modelo local.');
-    }
-    final node = Map<String, dynamic>.from(rawNode);
-    if (node['type'] == 'leaf') {
-      final value = node['value'];
-      if (value is! int || (value != 0 && value != 1)) {
-        throw const FormatException('La hoja debe contener un voto binario.');
-      }
-      return value;
-    }
-    if (node['type'] != 'split' ||
-        node['feature_index'] is! int ||
-        node['threshold'] is! num) {
-      throw const FormatException('Nodo de bifurcación inválido.');
-    }
-
-    final featureIndex = node['feature_index'] as int;
-    if (featureIndex < 0 || featureIndex >= features.length) {
-      throw const FormatException('Índice de característica fuera de rango.');
-    }
-    final branch = features[featureIndex] <=
-            (node['threshold'] as num).toDouble()
-        ? node['left']
-        : node['right'];
-    return _evaluateNode(branch, features);
-  }
-
   List<String> _extractDomains(String payload) {
     final domains = <String>{};
     try {
       _collectDomains(jsonDecode(payload), domains);
     } on FormatException {
-      for (final match in _domainPattern.allMatches(payload)) {
+      const domainPattern =
+          r'[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9-]{1,63})+';
+      for (final match in RegExp(domainPattern).allMatches(payload)) {
         final value = match.group(0);
         if (value != null) domains.add(_normalizeDomain(value));
       }
@@ -626,7 +588,14 @@ class AuraAIBrain {
     if (value is Map) {
       for (final entry in value.entries) {
         final key = entry.key.toString().toLowerCase();
-        if (_domainFieldNames.contains(key) && entry.value is String) {
+        if (const {
+              'domain',
+              'host',
+              'hostname',
+              'qname',
+              'requested_domain',
+            }.contains(key) &&
+            entry.value is String) {
           final domain = _normalizeDomain(entry.value as String);
           if (domain.contains('.')) domains.add(domain);
         } else {
