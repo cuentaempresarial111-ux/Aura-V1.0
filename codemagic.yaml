@@ -1,10 +1,14 @@
 workflows:
-  android-build:
-    name: Aura Cyberdefense APK Build
+  android-release:
+    name: Aura Android Release Pipeline
     max_build_duration: 60
     instance_type: mac_mini_m1
     environment:
-      flutter: 3.47.5
+      groups:
+        - production_keys
+      vars:
+        PACKAGE_NAME: "com.aura.cyberdefense"
+      flutter: stable
       java: 21
     triggering:
       events:
@@ -19,14 +23,20 @@ workflows:
           cd "${CM_BUILD_DIR:?CM_BUILD_DIR is required}"
           : "${FLUTTER_ROOT:?FLUTTER_ROOT is required}"
           printf 'flutter.sdk=%s\n' "$FLUTTER_ROOT" > android/local.properties
+      - name: Validar inyección de variables criptográficas
+        script: |
+          if [ -z "$AURA_PUBLIC_KEY_ENV" ]; then
+            echo "❌ ERROR CRÍTICO: AURA_PUBLIC_KEY_ENV no está definida en el entorno de Codemagic."
+            echo "Por favor configure la variable en el panel web antes de reintentar."
+            exit 1
+          fi
       - name: Build Android APK (Release, signed model updates)
         script: |
           set -euo pipefail
           cd "${CM_BUILD_DIR:?CM_BUILD_DIR is required}"
           flutter clean
           flutter pub get
-          : "${AURA_PUBLIC_KEY_ENV:?Configure AURA_PUBLIC_KEY_ENV in the Codemagic environment}"
           flutter build apk --release --dart-define="AURA_PUBLIC_KEY=$AURA_PUBLIC_KEY_ENV"
     artifacts:
-      - build/app/outputs/flutter-apk/*.apk
+      - build/app/outputs/flutter-apk/app-release.apk
       
