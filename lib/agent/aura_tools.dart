@@ -32,20 +32,14 @@ class ToolResult {
 }
 
 abstract class AuraTools {
-  static const Uri _modelUri = Uri(
-    scheme: 'https',
-    host: 'cuentaempresarial111-ux.github.io',
-    path: '/Aura-V1.0/model/aura_brain_model.json',
+  static final Uri _modelUri = Uri.parse(
+    'https://cuentaempresarial111-ux.github.io/Aura-V1.0/model/aura_brain_model.json',
   );
-  static const Uri _modelDigestUri = Uri(
-    scheme: 'https',
-    host: 'cuentaempresarial111-ux.github.io',
-    path: '/Aura-V1.0/model/aura_brain_model.json.sha256',
+  static final Uri _modelDigestUri = Uri.parse(
+    'https://cuentaempresarial111-ux.github.io/Aura-V1.0/model/aura_brain_model.json.sha256',
   );
-  static const Uri _modelSignatureUri = Uri(
-    scheme: 'https',
-    host: 'cuentaempresarial111-ux.github.io',
-    path: '/Aura-V1.0/model/aura_brain_model.json.sig',
+  static final Uri _modelSignatureUri = Uri.parse(
+    'https://cuentaempresarial111-ux.github.io/Aura-V1.0/model/aura_brain_model.json.sig',
   );
   static const int _maxModelBytes = 5 * 1024 * 1024;
   static const MethodChannel _engineChannel =
@@ -130,21 +124,22 @@ abstract class AuraTools {
           );
         case 'cryptographic_purge':
           await AuraAIBrain.purgeAllInMemoryModels();
-          final nativeAuditPurged = await _engineChannel.invokeMethod<bool>(
+          final nativeAuditMemoryPurged = await _engineChannel.invokeMethod<bool>(
                 'purgeAuditMemory',
               ) ??
               false;
           await _secureVault.purgeSensitiveData();
-          return const ToolResult(
+          final Map<String, dynamic> auditData = {
+            'ok': true,
+            'model_cache_purged': true,
+            'secure_storage_purged': true,
+            'native_audit_memory_purged': nativeAuditMemoryPurged,
+            'api_key_present': false,
+          };
+          return ToolResult(
             summary:
                 'Cachés de modelos y datos de SecureVault eliminados. No hay una API key registrada en este almacenamiento.',
-            data: <String, dynamic>{
-              'ok': true,
-              'model_cache_purged': true,
-              'secure_storage_purged': true,
-              'native_audit_memory_purged': nativeAuditPurged,
-              'api_key_present': false,
-            },
+            data: auditData,
           );
         default:
           return ToolResult(
