@@ -231,8 +231,7 @@ class MainActivity: FlutterFragmentActivity() {
                     } else {
                         try {
                             val dnsRuleAdded = TProxyService.TProxyBlockDomain(domain)
-                            val sniRuleAdded =
-                                TProxyService.TProxyAddDynamicSniRule(domain)
+                            val sniRuleAdded = addDnsBlockRuleNative(domain)
                             result.success(sniRuleAdded && dnsRuleAdded)
                         } catch (exception: Exception) {
                             android.util.Log.e(
@@ -818,6 +817,8 @@ class MainActivity: FlutterFragmentActivity() {
         pendingVoiceResult = null
         super.onDestroy()
     }
+
+    private external fun addDnsBlockRuleNative(domain: String): Boolean
 
     private fun normalizeThreatDomain(value: String?): String? {
         val domain = value?.trim()?.trimEnd('.')?.lowercase(Locale.ROOT) ?: return null

@@ -395,6 +395,26 @@ native_add_dynamic_sni_rule (JNIEnv *env, jclass klass, jstring domain)
     }
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_ciberdefensa_aura_MainActivity_addDnsBlockRuleNative (
+    JNIEnv *env, jobject thiz, jstring domain)
+{
+    const char *value;
+    int result;
+
+    (void)thiz;
+    if (!domain)
+        return JNI_FALSE;
+
+    value = (*env)->GetStringUTFChars (env, domain, NULL);
+    if (!value)
+        return JNI_FALSE;
+
+    result = aura_add_dynamic_sni_rule (value);
+    (*env)->ReleaseStringUTFChars (env, domain, value);
+    return result > 0 ? JNI_TRUE : JNI_FALSE;
+}
+
 static jboolean
 native_set_dynamic_sni_allowlist (JNIEnv *env, jobject thiz,
                                   jobjectArray domains)
