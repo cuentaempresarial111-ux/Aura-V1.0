@@ -20,6 +20,17 @@ public final class TProxyService {
 
     public static native boolean TProxyBlockDomain(String domain);
 
+    private static native void addDynamicSniRule(String domain);
+    public static native boolean TProxySetDynamicSniAllowlist(String[] domains);
+
+    public static boolean TProxyAddDynamicSniRule(String domain) {
+        if (domain == null || domain.trim().isEmpty() || !TProxyIsRunning()) {
+            return false;
+        }
+        addDynamicSniRule(domain);
+        return true;
+    }
+
     public static boolean protectSocket(int socketFd) {
         return com.ciberdefensa.aura.AuraVpnService.protectSocket(socketFd);
     }

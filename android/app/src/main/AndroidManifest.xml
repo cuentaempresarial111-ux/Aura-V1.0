@@ -49,6 +49,16 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
+
+        <service
+            android:name="com.aura.cyberdefense.AuraNotificationService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Persistent notification service for the user-authorized Aura VPN firewall" />
+        </service>
         
         <!-- Forzar uso obligatorio de la arquitectura moderna v2 de Flutter -->
         <meta-data

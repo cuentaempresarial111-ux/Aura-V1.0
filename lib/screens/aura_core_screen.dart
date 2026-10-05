@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../agent/agent_controller.dart';
 import '../agent/agent_event.dart';
+import '../infrastructure/agent/aura_intent_parser.dart';
 import '../providers/aura_state_provider.dart';
 import '../theme/aura_tokens.dart';
 
@@ -25,6 +26,7 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
   bool _isListening = false;
   bool _isRunning = false;
   int _lastRenderedEventCount = -1;
+  AgentEvent? _lastCommandResponse;
 
   @override
   void initState() {
@@ -57,7 +59,20 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
     _inputController.clear();
     setState(() => _isRunning = true);
     try {
-      await AgentController.instance.run(instruction);
+      final result = await AuraIntentParser.executeCommand(instruction);
+      final response = result['response'];
+      final responseEvent = result['event'];
+      if (mounted && response is String && responseEvent is AgentEvent) {
+        setState(() {
+          _lastCommandResponse = AgentEvent(
+            kind: responseEvent.kind,
+            message: response,
+            ts: responseEvent.ts,
+            data: <String, dynamic>{'terminal_response': true},
+          );
+        });
+      }
+      _scrollToLatest(AgentController.instance.history.length, force: true);
     } finally {
       if (mounted) setState(() => _isRunning = false);
     }
@@ -96,16 +111,12 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
     }
   }
 
-  void _scrollToLatest(int eventCount) {
-    if (eventCount == _lastRenderedEventCount) return;
+  void _scrollToLatest(int eventCount, {bool force = false}) {
+    if (!force && eventCount == _lastRenderedEventCount) return;
     _lastRenderedEventCount = eventCount;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOut,
-      );
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
     });
   }
 
@@ -129,8 +140,21 @@ class _AuraCoreScreenState extends State<AuraCoreScreen>
                 builder: (context, snapshot) {
                   final events = List<AgentEvent>.of(
                     AgentController.instance.history,
-                    growable: false,
+                    growable: true,
                   );
+                  final commandResponse = _lastCommandResponse;
+                  if (commandResponse != null) {
+                    final responseText = commandResponse.message.replaceFirst(
+                      RegExp(r'^\[(?:OK|WARN|CRIT)\]\s*'),
+                      '',
+                    );
+                    final responseIndex = events.lastIndexWhere(
+                      (event) => event.message == responseText,
+                    );
+                    if (responseIndex >= 0) {
+                      events[responseIndex] = commandResponse;
+                    }
+                  }
                   _scrollToLatest(events.length);
                   return ListView.builder(
                     controller: _scrollController,
@@ -212,6 +236,7 @@ class _SyslogLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isCommandResponse = event.data?['terminal_response'] == true;
     final (prefix, color) = switch (event.kind) {
       AgentEventKind.thought => ('[  INF  ] ', AuraTokens.textMuted),
       AgentEventKind.action => ('[  NET  ] ', AuraTokens.accent),
@@ -219,8 +244,7 @@ class _SyslogLine extends StatelessWidget {
       AgentEventKind.warning => ('[  WARN ] ', AuraTokens.warning),
       AgentEventKind.error => ('[  CRIT ] ', AuraTokens.danger),
     };
-    final timestamp =
-        '${event.ts.hour.toString().padLeft(2, '0')}:'
+    final timestamp = '${event.ts.hour.toString().padLeft(2, '0')}:'
         '${event.ts.minute.toString().padLeft(2, '0')}:'
         '${event.ts.second.toString().padLeft(2, '0')}';
 
@@ -234,7 +258,7 @@ class _SyslogLine extends StatelessWidget {
               style: const TextStyle(color: AuraTokens.textMuted),
             ),
             TextSpan(
-              text: prefix,
+              text: isCommandResponse ? '' : prefix,
               style: TextStyle(color: color, fontWeight: FontWeight.w700),
             ),
             TextSpan(

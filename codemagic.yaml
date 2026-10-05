@@ -8,8 +8,9 @@ workflows:
         - production_keys
       vars:
         PACKAGE_NAME: "com.aura.cyberdefense"
+      # AURA_PUBLIC_KEY_ENV is injected by production_keys; store only the Base64 DER body there.
       flutter: stable
-      java: 21
+      java: 17
     triggering:
       events:
         - push
@@ -17,30 +18,11 @@ workflows:
         - pattern: 'main'
         - pattern: 'principal'
     scripts:
-      - name: Set up local.properties
+      - name: Configure JDK 17 and build Android APK (Release)
         script: |
           set -euo pipefail
           cd "${CM_BUILD_DIR:?CM_BUILD_DIR is required}"
-          : "${FLUTTER_ROOT:?FLUTTER_ROOT is required}"
-          printf 'flutter.sdk=%s\n' "$FLUTTER_ROOT" > android/local.properties
-      - name: Validar e inyectar variables criptográficas
-        script: |
-          set -euo pipefail
-          echo "Comprobando variables de entorno..."
-          if [[ -z "${AURA_PUBLIC_KEY_ENV:-}" ]]; then
-            echo "⚠️ ADVERTENCIA: AURA_PUBLIC_KEY_ENV no detectada en el panel. Usando fallback de desarrollo; las actualizaciones firmadas con la clave de producción no se verificarán."
-            export AURA_PUBLIC_KEY_ENV="MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwZrNx8eVlLmo53sOOS0r2pXVw6P171BOikTKZr9mf0f0e+a6eeMH8UEwjvKH7B6hrDdISSiBbEaP56oFfTlrz1LGXHQnF98PwoncRAAnGLhKD6CILcMd+/7p+t7pgBN5i74ky3KxCVTeze/3Gr7IuRkW7Xoj2GqvSt/tT01u3wmahBgtWLStXD0wJfa5jrnsVOVIZ+N6vSLnsBCKM5A+8aIHj61rWRXfkSwx5YSFc4zC/E1somOhG7GRrtY2OgoNnf3n/iWbackE0xxj/cTgKwhwSxnD+5r6Evl6gayDlj8zBtY0N9eu7RzjjeFILMw+OMKkJpe2d59LHHlHlXG17wIDAQAB"
-          else
-            echo "🟢 Variable detectada correctamente desde el panel web."
-          fi
-          printf 'AURA_PUBLIC_KEY_ENV=%s\n' "$AURA_PUBLIC_KEY_ENV" >> "${CM_ENV:?CM_ENV is required}"
-      - name: Build Android APK (Release, signed model updates)
-        script: |
-          set -euo pipefail
-          cd "${CM_BUILD_DIR:?CM_BUILD_DIR is required}"
-          flutter clean
-          flutter pub get
-          flutter build apk --release --dart-define="AURA_PUBLIC_KEY=$AURA_PUBLIC_KEY_ENV"
+          bash tool/compile_aura.sh
     artifacts:
       - build/app/outputs/flutter-apk/app-release.apk
       

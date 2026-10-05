@@ -20,6 +20,8 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import hev.htproxy.TProxyService
+import com.aura.cyberdefense.AuraCryptoSecure
+import com.aura.cyberdefense.AuraNotificationService
 import java.util.concurrent.Executors
 import java.util.Locale
 
@@ -228,10 +230,147 @@ class MainActivity: FlutterFragmentActivity() {
                         result.success(false)
                     } else {
                         try {
-                            val blocked = TProxyService.TProxyBlockDomain(domain)
-                            result.success(blocked)
-                        } catch (_: Exception) {
+                            val dnsRuleAdded = TProxyService.TProxyBlockDomain(domain)
+                            val sniRuleAdded =
+                                TProxyService.TProxyAddDynamicSniRule(domain)
+                            result.success(sniRuleAdded && dnsRuleAdded)
+                        } catch (exception: Exception) {
+                            android.util.Log.e(
+                                "AuraSniFirewall",
+                                "Could not install the dynamic domain rule.",
+                                exception,
+                            )
                             result.success(false)
+                        }
+                    }
+                }
+
+                "addDynamicSniRule" -> {
+                    val arguments = call.arguments as? Map<*, *>
+                    val domain = normalizeThreatDomain(arguments?.get("domain") as? String)
+                    if (domain == null) {
+                        result.error(
+                            "INVALID_DOMAIN",
+                            "Se requiere un dominio válido para la regla SNI.",
+                            null,
+                        )
+                    } else if (!TProxyService.TProxyIsRunning()) {
+                        result.error(
+                            "TUNNEL_NOT_RUNNING",
+                            "El túnel Aura no está activo.",
+                            null,
+                        )
+                    } else {
+                        try {
+                            result.success(TProxyService.TProxyAddDynamicSniRule(domain))
+                        } catch (exception: Exception) {
+                            android.util.Log.e(
+                                "AuraSniFirewall",
+                                "Could not install the dynamic SNI block rule.",
+                                exception,
+                            )
+                            result.error(
+                                "SNI_RULE_FAILED",
+                                "No se pudo instalar la regla dinámica SNI.",
+                                null,
+                            )
+                        }
+                    }
+                }
+
+                "setDynamicSniAllowlist" -> {
+                    val arguments = call.arguments as? Map<*, *>
+                    val rawDomains = arguments?.get("domains") as? List<*>
+                    val domains = rawDomains
+                        ?.map { normalizeThreatDomain(it as? String) }
+                    if (domains == null || domains.size > 1024 ||
+                        domains.any { it == null }
+                    ) {
+                        result.error(
+                            "INVALID_ALLOWLIST",
+                            "La allowlist SNI no tiene un formato válido.",
+                            null,
+                        )
+                    } else {
+                        try {
+                            val synchronized =
+                                TProxyService.TProxySetDynamicSniAllowlist(
+                                    domains.filterNotNull().toTypedArray(),
+                                )
+                            if (synchronized) {
+                                result.success(true)
+                            } else {
+                                result.error(
+                                    "ALLOWLIST_SYNC_FAILED",
+                                    "El firewall nativo no confirmó la allowlist.",
+                                    null,
+                                )
+                            }
+                        } catch (exception: Exception) {
+                            android.util.Log.e(
+                                "AuraSniFirewall",
+                                "Could not synchronize the SNI allowlist.",
+                                exception,
+                            )
+                            result.error(
+                                "ALLOWLIST_SYNC_FAILED",
+                                "No se pudo sincronizar la allowlist con el firewall nativo.",
+                                null,
+                            )
+                        }
+                    }
+                }
+
+                "decryptModelNative" -> {
+                    val arguments = call.arguments as? Map<*, *>
+                    val encryptedData = arguments?.get("encryptedData") as? ByteArray
+                    val keyBytes = arguments?.get("keyBytes") as? ByteArray
+                    val ivBytes = arguments?.get("ivBytes") as? ByteArray
+                    if (encryptedData == null || keyBytes == null || ivBytes == null) {
+                        keyBytes?.fill(0)
+                        ivBytes?.fill(0)
+                        result.error(
+                            "INVALID_CRYPTO_INPUT",
+                            "El ciphertext, la clave AES y el IV son obligatorios.",
+                            null,
+                        )
+                    } else {
+                        genomeScannerExecutor.execute {
+                            try {
+                                val plaintext = AuraCryptoSecure.decryptModel(
+                                    encryptedData,
+                                    keyBytes,
+                                    ivBytes,
+                                )
+                                runOnUiThread {
+                                    try {
+                                        if (plaintext.isEmpty()) {
+                                            result.error(
+                                                "MODEL_DECRYPTION_FAILED",
+                                                "El descifrado nativo no produjo un modelo válido.",
+                                                null,
+                                            )
+                                        } else {
+                                            result.success(plaintext)
+                                        }
+                                    } finally {
+                                        plaintext.fill(0)
+                                    }
+                                }
+                            } catch (exception: Exception) {
+                                android.util.Log.e(
+                                    "AuraCryptoSecure",
+                                    "Native model decryption failed.",
+                                    exception,
+                                )
+                                runOnUiThread {
+                                    result.error(
+                                        "MODEL_DECRYPTION_FAILED",
+                                        "No se pudo descifrar el modelo local.",
+                                        null,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -516,6 +655,7 @@ class MainActivity: FlutterFragmentActivity() {
                 "stopShield" -> {
                     val intent = Intent(this, AuraVpnService::class.java)
                     stopService(intent)
+                    stopService(Intent(this, AuraNotificationService::class.java))
                     result.success(true)
                 }
 
@@ -639,7 +779,15 @@ class MainActivity: FlutterFragmentActivity() {
             } else {
                 startService(intent)
             }
+            val notificationIntent = Intent(this, AuraNotificationService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(notificationIntent)
+            } else {
+                startService(notificationIntent)
+            }
         } catch (exception: Exception) {
+            stopService(Intent(this, AuraVpnService::class.java))
+            stopService(Intent(this, AuraNotificationService::class.java))
             pendingShieldResult?.success(false)
             pendingShieldResult = null
             android.util.Log.e("AuraVPN", "No se pudo iniciar AuraVpnService.", exception)

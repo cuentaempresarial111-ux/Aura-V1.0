@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../ai_brain.dart';
+import '../infrastructure/security/aura_dynamic_whitelist.dart';
 import '../providers/aura_state_provider.dart';
 import '../voice_engine.dart';
 import 'aura_intent_parser.dart';
@@ -186,6 +187,54 @@ class AgentController {
     );
     try {
       final intent = await AuraIntentParser.parse(text);
+      if (intent.kind == AuraIntentKind.block) {
+        final domain = intent.entities['domain'];
+        if (domain is! String || domain.isEmpty) {
+          _securityState?.setSecurityLevel(AuraSecurityLevel.warning);
+          _emit(
+            AgentEvent(
+              kind: AgentEventKind.warning,
+              message: 'No se aplicó el bloqueo: el dominio no es válido.',
+              data: <String, dynamic>{'instruction': text},
+            ),
+          );
+          return;
+        }
+        try {
+          await AuraDynamicWhitelist.instance.initialize();
+        } on Object catch (error) {
+          _securityState?.setSecurityLevel(AuraSecurityLevel.warning);
+          _emit(
+            AgentEvent(
+              kind: AgentEventKind.warning,
+              message:
+                  'No se aplicó el bloqueo: no se pudo verificar la allowlist de infraestructura crítica ($error).',
+              data: <String, dynamic>{
+                'instruction': text,
+                'domain': domain,
+                'allowlist_check_failed': true,
+              },
+            ),
+          );
+          return;
+        }
+        if (AuraDynamicWhitelist.instance.isSafeHost(domain)) {
+          _securityState?.setSecurityLevel(AuraSecurityLevel.warning);
+          _emit(
+            AgentEvent(
+              kind: AgentEventKind.warning,
+              message:
+                  'Operación denegada: $domain está protegido por la allowlist de infraestructura crítica.',
+              data: <String, dynamic>{
+                'instruction': text,
+                'domain': domain,
+                'protected_host': true,
+              },
+            ),
+          );
+          return;
+        }
+      }
       final responseKind = switch (intent.kind) {
         AuraIntentKind.fear => AuraIntentKind.securityCheck,
         AuraIntentKind.provocation => AuraIntentKind.insult,
@@ -226,8 +275,7 @@ class AgentController {
 
       if (intent.kind == AuraIntentKind.status) {
         final level = _securityState?.securityLevel;
-        final message =
-            'Estado de seguridad reportado por la aplicación: '
+        final message = 'Estado de seguridad reportado por la aplicación: '
             '${level?.name ?? 'no disponible'}.';
         _emit(intent.toEvent());
         _emit(
@@ -308,7 +356,8 @@ class AgentController {
       _emit(
         AgentEvent(
           kind: AgentEventKind.warning,
-          message: 'La respuesta está disponible en texto; falló la voz: $error',
+          message:
+              'La respuesta está disponible en texto; falló la voz: $error',
           data: const <String, dynamic>{'component': 'flutter_tts'},
         ),
       );

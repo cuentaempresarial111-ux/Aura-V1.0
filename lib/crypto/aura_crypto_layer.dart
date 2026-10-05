@@ -1,8 +1,10 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:encrypt/encrypt.dart';
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/services.dart';
 
 class AuraCryptoException implements Exception {
   const AuraCryptoException(this.message, [this.cause]);
@@ -20,6 +22,8 @@ abstract final class AuraCryptoLayer {
   static const int _sha256Length = 32;
   static const int _rsa2048SignatureLength = 256;
   static const int _hkdfMaximumLength = 255 * _sha256Length;
+  static const MethodChannel _nativeCryptoChannel =
+      MethodChannel('com.aura.cyberdefense/engine');
   /// Raw Base64 SubjectPublicKeyInfo DER; verification fails closed when unset.
   static const String _auraPublicKeyEnv = String.fromEnvironment(
     'AURA_PUBLIC_KEY',
@@ -422,6 +426,79 @@ abstract final class AuraCryptoLayer {
       rethrow;
     } on Object catch (error) {
       throw AuraCryptoException('No se pudo descifrar el modelo.', error);
+    }
+  }
+
+  static Future<String> decryptModelSecure(
+    String encryptedHex,
+    String secureKey,
+  ) async {
+    if (defaultTargetPlatform != TargetPlatform.android) {
+      return decryptModel(encryptedHex, secureKey);
+    }
+
+    Uint8List? payload;
+    Uint8List? derivedKey;
+    Uint8List? ivBytes;
+    Uint8List? ciphertext;
+    Uint8List? plaintextBytes;
+    try {
+      if (secureKey.isEmpty ||
+          encryptedHex.isEmpty ||
+          encryptedHex.length.isOdd ||
+          !RegExp(r'^[0-9a-fA-F]+$').hasMatch(encryptedHex)) {
+        throw const AuraCryptoException('El payload cifrado no es válido.');
+      }
+
+      payload = Uint8List.fromList(
+        List<int>.generate(
+          encryptedHex.length ~/ 2,
+          (index) => int.parse(
+            encryptedHex.substring(index * 2, index * 2 + 2),
+            radix: 16,
+          ),
+          growable: false,
+        ),
+      );
+      final ciphertextLength = payload.length - _ivLength;
+      if (ciphertextLength < _aesBlockLength ||
+          ciphertextLength % _aesBlockLength != 0 ||
+          ciphertextLength > 5 * 1024 * 1024) {
+        throw const AuraCryptoException(
+          'La longitud del ciphertext AES no es válida.',
+        );
+      }
+
+      ivBytes = Uint8List.fromList(payload.sublist(0, _ivLength));
+      ciphertext = Uint8List.fromList(payload.sublist(_ivLength));
+      derivedKey = _deriveKey(secureKey);
+      plaintextBytes = await _nativeCryptoChannel.invokeMethod<Uint8List>(
+        'decryptModelNative',
+        <String, Object>{
+          'encryptedData': ciphertext,
+          'keyBytes': derivedKey,
+          'ivBytes': ivBytes,
+        },
+      );
+      if (plaintextBytes == null || plaintextBytes.isEmpty) {
+        throw const AuraCryptoException(
+          'El descifrado nativo devolvió un resultado vacío.',
+        );
+      }
+      return utf8.decode(plaintextBytes);
+    } on AuraCryptoException {
+      rethrow;
+    } on Object catch (error) {
+      throw AuraCryptoException(
+        'No se pudo descifrar el modelo nativamente.',
+        error,
+      );
+    } finally {
+      if (payload != null) secureZeroMemory(payload);
+      if (derivedKey != null) secureZeroMemory(derivedKey);
+      if (ivBytes != null) secureZeroMemory(ivBytes);
+      if (ciphertext != null) secureZeroMemory(ciphertext);
+      if (plaintextBytes != null) secureZeroMemory(plaintextBytes);
     }
   }
 

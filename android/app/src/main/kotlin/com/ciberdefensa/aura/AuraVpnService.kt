@@ -11,6 +11,7 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.aura.cyberdefense.AuraNotificationService
 import hev.htproxy.TProxyService
 import java.io.File
 import java.io.IOException
@@ -104,6 +105,7 @@ class AuraVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         activeService = this
+        AuraNetworkStream.setApplicationContext(applicationContext)
         panicIsolationActive = getSharedPreferences(
             VPN_STATE_PREFERENCES,
             MODE_PRIVATE,
@@ -156,6 +158,7 @@ class AuraVpnService : VpnService() {
         notificationHandler.removeCallbacksAndMessages(null)
         vpnInterface?.close()
         vpnInterface = null
+        stopService(android.content.Intent(this, AuraNotificationService::class.java))
         super.onDestroy()
     }
 

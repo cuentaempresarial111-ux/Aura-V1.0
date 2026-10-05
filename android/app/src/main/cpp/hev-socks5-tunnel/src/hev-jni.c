@@ -21,6 +21,7 @@
 
 #include "hev-main.h"
 #include "hev-socks5-tunnel.h"
+#include "aura_sni_firewall.h"
 
 #include "hev-jni.h"
 
@@ -64,6 +65,10 @@ static void native_set_blocked_ips (JNIEnv *env, jobject thiz,
                                     jobjectArray addresses);
 static jboolean native_block_domain (JNIEnv *env, jobject thiz,
                                      jstring domain);
+static void native_add_dynamic_sni_rule (JNIEnv *env, jclass klass,
+                                         jstring domain);
+static jboolean native_set_dynamic_sni_allowlist (JNIEnv *env, jobject thiz,
+                                                  jobjectArray domains);
 
 static JNINativeMethod native_methods[] = {
     { "TProxyStartService", "(Ljava/lang/String;I)Z",
@@ -74,6 +79,10 @@ static JNINativeMethod native_methods[] = {
         { "TProxySetBlockedIps", "([Ljava/lang/String;)V",
             (void *)native_set_blocked_ips },
     { "TProxyBlockDomain", "(Ljava/lang/String;)Z", (void *)native_block_domain },
+    { "addDynamicSniRule", "(Ljava/lang/String;)V",
+      (void *)native_add_dynamic_sni_rule },
+    { "TProxySetDynamicSniAllowlist", "([Ljava/lang/String;)Z",
+      (void *)native_set_dynamic_sni_allowlist },
 };
 
 static void
@@ -348,6 +357,147 @@ native_block_domain (JNIEnv *env, jobject thiz, jstring domain)
     result = hev_socks5_tunnel_block_domain (value);
     (*env)->ReleaseStringUTFChars (env, domain, value);
     return result > 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+static void
+native_add_dynamic_sni_rule (JNIEnv *env, jclass klass, jstring domain)
+{
+    const char *value;
+    int result;
+
+    (void)klass;
+    if (!domain) {
+        jclass exception_class = (*env)->FindClass (env, "java/lang/IllegalArgumentException");
+        if (exception_class)
+            (*env)->ThrowNew (env, exception_class, "SNI domain must not be null.");
+        return;
+    }
+
+    value = (*env)->GetStringUTFChars (env, domain, NULL);
+    if (!value)
+        return;
+
+    result = aura_add_dynamic_sni_rule (value);
+    (*env)->ReleaseStringUTFChars (env, domain, value);
+    if (result > 0)
+        return;
+
+    {
+        const char *class_name = result < 0
+                                     ? "java/lang/IllegalArgumentException"
+                                     : "java/lang/IllegalStateException";
+        const char *message = result < 0
+                                  ? "Invalid SNI domain."
+                                  : "Dynamic SNI rule capacity is exhausted.";
+        jclass exception_class = (*env)->FindClass (env, class_name);
+        if (exception_class)
+            (*env)->ThrowNew (env, exception_class, message);
+    }
+}
+
+static jboolean
+native_set_dynamic_sni_allowlist (JNIEnv *env, jobject thiz,
+                                  jobjectArray domains)
+{
+    const jsize domain_count = domains
+                                   ? (*env)->GetArrayLength (env, domains)
+                                   : 0;
+    const size_t capacity = (size_t)domain_count;
+    char **parsed;
+    size_t count = 0;
+    jsize i;
+    int result;
+
+    (void)thiz;
+    if (!domains) {
+        jclass exception_class =
+            (*env)->FindClass (env, "java/lang/IllegalArgumentException");
+        if (exception_class)
+            (*env)->ThrowNew (env, exception_class,
+                              "Dynamic SNI allowlist must not be null.");
+        return JNI_FALSE;
+    }
+    if (capacity > 1024) {
+        jclass exception_class =
+            (*env)->FindClass (env, "java/lang/IllegalArgumentException");
+        free (parsed);
+        if (exception_class)
+            (*env)->ThrowNew (env, exception_class,
+                              "Dynamic SNI allowlist exceeds 1024 domains.");
+        return JNI_FALSE;
+    }
+    parsed = calloc (capacity ? capacity : 1, sizeof (*parsed));
+    if (!parsed)
+        return JNI_FALSE;
+    for (i = 0; i < domain_count; i++) {
+        jstring value =
+            (jstring)(*env)->GetObjectArrayElement (env, domains, i);
+        const char *text;
+        size_t length;
+
+        if (!value)
+            goto invalid_domain;
+        text = (*env)->GetStringUTFChars (env, value, NULL);
+        if (!text) {
+            (*env)->DeleteLocalRef (env, value);
+            goto jni_failure;
+        }
+        length = strlen (text);
+        if (!length || length > 253) {
+            (*env)->ReleaseStringUTFChars (env, value, text);
+            (*env)->DeleteLocalRef (env, value);
+            goto invalid_domain;
+        }
+        parsed[count] = malloc (length + 1);
+        if (!parsed[count]) {
+            (*env)->ReleaseStringUTFChars (env, value, text);
+            (*env)->DeleteLocalRef (env, value);
+            goto allocation_failed;
+        }
+        memcpy (parsed[count], text, length + 1);
+        count++;
+        (*env)->ReleaseStringUTFChars (env, value, text);
+        (*env)->DeleteLocalRef (env, value);
+    }
+
+    result = aura_set_dynamic_sni_allowlist (
+        (const char *const *)parsed, count);
+    for (i = 0; i < (jsize)count; i++)
+        free (parsed[i]);
+    free (parsed);
+    return result > 0 ? JNI_TRUE : JNI_FALSE;
+
+invalid_domain:
+    for (i = 0; i < (jsize)count; i++)
+        free (parsed[i]);
+    free (parsed);
+    {
+        jclass exception_class =
+            (*env)->FindClass (env, "java/lang/IllegalArgumentException");
+        if (exception_class)
+            (*env)->ThrowNew (env, exception_class,
+                              "Dynamic SNI allowlist contains an invalid domain.");
+    }
+    return JNI_FALSE;
+
+allocation_failed:
+    for (i = 0; i < (jsize)count; i++)
+        free (parsed[i]);
+    free (parsed);
+    {
+        jclass exception_class =
+            (*env)->FindClass (env, "java/lang/OutOfMemoryError");
+        if (exception_class)
+            (*env)->ThrowNew (env, exception_class,
+                              "Could not allocate the dynamic SNI allowlist.");
+    }
+    return JNI_FALSE;
+
+jni_failure:
+    for (i = 0; i < (jsize)count; i++)
+        free (parsed[i]);
+    free (parsed);
+    return JNI_FALSE;
 }
 
 #endif /* ANDROID */

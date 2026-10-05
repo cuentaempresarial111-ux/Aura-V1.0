@@ -153,6 +153,11 @@ android.sourceSets.main.jniLibs.srcDir(hevJniLibsDir)
 
 tasks.register("buildHevSocks5Tunnel", Exec) {
     inputs.dir(hevSourceDir)
+    inputs.files(
+        file("src/main/cpp/aura_crypto_secure.c"),
+        file("src/main/cpp/aura_sni_firewall.c"),
+        file("src/main/cpp/aura_sni_firewall.h"),
+    )
     outputs.dir(hevJniLibsDir)
 
     doFirst {

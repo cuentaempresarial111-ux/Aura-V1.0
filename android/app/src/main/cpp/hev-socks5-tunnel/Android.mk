@@ -30,8 +30,11 @@ SRCDIR := $(LOCAL_PATH)/src
 
 include $(LOCAL_PATH)/build.mk
 HEV_SOCKS5_TUNNEL_SRC := $(patsubst $(SRCDIR)/%,src/%,$(SRCFILES))
+HEV_SNI_FIREWALL_SRC := ../aura_sni_firewall.c
+HEV_CRYPTO_SECURE_SRC := ../aura_crypto_secure.c
 HEV_SOCKS5_TUNNEL_INCLUDES := \
     $(LOCAL_PATH)/src \
+    $(LOCAL_PATH)/.. \
     $(LOCAL_PATH)/src/misc \
     $(LOCAL_PATH)/src/core/include \
     $(LOCAL_PATH)/third-part/yaml/include \
@@ -40,14 +43,16 @@ HEV_SOCKS5_TUNNEL_INCLUDES := \
     $(LOCAL_PATH)/third-part/hev-task-system/include
 HEV_SOCKS5_TUNNEL_LDFLAGS := \
     -Wl,-z,max-page-size=16384 \
+    -Wl,-z,relro,-z,now \
     -Wl,-z,common-page-size=16384
 
 # Shared library build
 include $(CLEAR_VARS)
 LOCAL_MODULE := hev-socks5-tunnel
-LOCAL_SRC_FILES := $(HEV_SOCKS5_TUNNEL_SRC)
+LOCAL_SRC_FILES := $(HEV_SOCKS5_TUNNEL_SRC) $(HEV_SNI_FIREWALL_SRC) $(HEV_CRYPTO_SECURE_SRC)
 LOCAL_C_INCLUDES := $(HEV_SOCKS5_TUNNEL_INCLUDES)
 LOCAL_CFLAGS += -DFD_SET_DEFINED -DSOCKLEN_T_DEFINED -DENABLE_LIBRARY
+LOCAL_CFLAGS += -O3 -fstack-protector-strong -D_FORTIFY_SOURCE=2
 LOCAL_CFLAGS += $(VERSION_CFLAGS)
 ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)
 LOCAL_CFLAGS += -mfpu=neon
@@ -59,9 +64,10 @@ include $(BUILD_SHARED_LIBRARY)
 # Standalone executable build
 include $(CLEAR_VARS)
 LOCAL_MODULE := hev-socks5-tunnel-bin
-LOCAL_SRC_FILES := $(HEV_SOCKS5_TUNNEL_SRC)
+LOCAL_SRC_FILES := $(HEV_SOCKS5_TUNNEL_SRC) $(HEV_SNI_FIREWALL_SRC) $(HEV_CRYPTO_SECURE_SRC)
 LOCAL_C_INCLUDES := $(HEV_SOCKS5_TUNNEL_INCLUDES)
 LOCAL_CFLAGS += -DFD_SET_DEFINED -DSOCKLEN_T_DEFINED
+LOCAL_CFLAGS += -O3 -fstack-protector-strong -D_FORTIFY_SOURCE=2
 LOCAL_CFLAGS += $(VERSION_CFLAGS)
 ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)
 LOCAL_CFLAGS += -mfpu=neon

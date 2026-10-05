@@ -1,7 +1,7 @@
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'agent/aura_crypto_layer.dart';
 import 'agent/aura_whitelist.dart';
+import 'infrastructure/security/aura_dynamic_whitelist.dart';
 import 'models/aura_ai_brain.dart';
 import 'secure_vault.dart';
 import 'providers/aura_state_provider.dart';
@@ -367,26 +368,58 @@ class AuraAIBrain {
 
   Future<String> analyzeThreatPayload(String payload) async {
     try {
+      final extractedDomains = _extractDomains(payload);
+      final protectedDomains = <String>[];
+      final analyzableDomains = <String>[];
+      for (final domain in extractedDomains) {
+        if (AuraDynamicWhitelist.instance.isSafeHost(domain)) {
+          protectedDomains.add(domain);
+        } else {
+          analyzableDomains.add(domain);
+        }
+      }
+      for (final domain in protectedDomains) {
+        developer.log(
+          'Dominio protegido por el Escudo Allowlist: $domain',
+          name: 'AuraAIInference',
+          level: 800,
+        );
+      }
+      if (extractedDomains.isNotEmpty && analyzableDomains.isEmpty) {
+        return protectedDomains
+            .map(
+              (domain) => 'Dominio protegido por el Escudo Allowlist: $domain.',
+            )
+            .join('\n');
+      }
+      final inferencePayload = extractedDomains.isEmpty
+          ? payload
+          : jsonEncode(<String, Object?>{
+              'hosts': analyzableDomains
+                  .map((domain) => <String, String>{'host': domain})
+                  .toList(growable: false),
+            });
+
       if (_forceRuleFallback) {
-        final domains = _extractDomains(payload);
+        final domains = _extractDomains(inferencePayload);
         if (domains.isEmpty) {
           return 'Análisis local limitado a dominios: no se encontró un dominio válido.';
         }
         return _analyzeWithDefaultRules(domains);
       }
-      if (!payload.contains('.')) {
+      if (!inferencePayload.contains('.')) {
         return 'Análisis local limitado a dominios: no se encontró un dominio válido.';
       }
       final model = await _getModel();
       if (_forceRuleFallback) {
-        final domains = _extractDomains(payload);
+        final domains = _extractDomains(inferencePayload);
         if (domains.isEmpty) {
           return 'Análisis local limitado a dominios: no se encontró un dominio válido.';
         }
         return _analyzeWithDefaultRules(domains);
       }
       final inferenceResults = await AuraAIInference.analyzeThreatPayload(
-        rawData: payload,
+        rawData: inferencePayload,
         modelStructure: model,
         suspiciousTlds: _suspiciousTlds.toList(growable: false),
       );
@@ -394,7 +427,11 @@ class AuraAIBrain {
         return 'Análisis local limitado a dominios: no se encontró un dominio válido.';
       }
 
-      final results = <String>[];
+      final results = protectedDomains
+          .map(
+            (domain) => 'Dominio protegido por el Escudo Allowlist: $domain.',
+          )
+          .toList();
       for (final inference in inferenceResults) {
         final domain = inference.host;
         final threatScore = inference.threatScore;
@@ -480,7 +517,7 @@ class AuraAIBrain {
             'El SHA-256 del modelo cifrado local no coincide.',
           );
         }
-        final plaintext = AuraCryptoLayer.decryptModel(
+        final plaintext = await AuraCryptoLayer.decryptModelSecure(
           utf8.decode(artifactBytes),
           secureKey,
         );

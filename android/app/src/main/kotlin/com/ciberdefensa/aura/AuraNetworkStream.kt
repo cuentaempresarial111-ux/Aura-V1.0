@@ -79,7 +79,7 @@ object AuraNetworkStream : EventChannel.StreamHandler {
     ) {
         val action = when (actionCode) {
             2 -> "DGA_ALERT"
-            1 -> "BLOCKED"
+            1, 3 -> "BLOCKED"
             else -> "ALLOWED"
         }
         synchronized(lock) {
@@ -97,6 +97,15 @@ object AuraNetworkStream : EventChannel.StreamHandler {
             if (!resolverScheduled) {
                 resolverScheduled = true
                 uidResolver.execute(::resolveQueuedEvents)
+            }
+        }
+        if (actionCode == 3) {
+            val context = synchronized(lock) { applicationContext }
+            if (context != null) {
+                com.aura.cyberdefense.AuraNotificationService.triggerDgaAlert(
+                    context,
+                    domain,
+                )
             }
         }
     }
