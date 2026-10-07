@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
-import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +13,9 @@ import 'infrastructure/security/aura_dynamic_whitelist.dart';
 import 'models/aura_ai_brain.dart';
 import 'secure_vault.dart';
 import 'providers/aura_state_provider.dart';
+import 'security/shannon_entropy.dart';
+
+export 'security/shannon_entropy.dart';
 
 typedef AuraToolStartedCallback = void Function(
   String toolName,
@@ -48,19 +51,6 @@ const Set<String> _suspiciousTlds = {
   'xyz',
   'zip',
 };
-
-double calculateShannonEntropy(String core) {
-  if (core.isEmpty) return 0;
-  final counts = <int, int>{};
-  for (final codeUnit in core.toLowerCase().codeUnits) {
-    counts.update(codeUnit, (count) => count + 1, ifAbsent: () => 1);
-  }
-  final length = core.length;
-  return -counts.values.fold<double>(0, (entropy, count) {
-    final probability = count / length;
-    return entropy + probability * (math.log(probability) / math.ln2);
-  });
-}
 
 List<double> extractFeatures(String domain) {
   final host = _normalizeDomain(domain);
